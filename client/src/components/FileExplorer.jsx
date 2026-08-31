@@ -56,15 +56,19 @@ export default function FileExplorer({
 }) {
   const [activeContextMenu, setActiveContextMenu] = useState(null);
 
+  const safeFiles = Array.isArray(files) ? files : [];
+  const safeFolders = Array.isArray(folders) ? folders : [];
+  const safeSelectedFiles = Array.isArray(selectedFiles) ? selectedFiles : [];
+
   // Get current folder object and breadcrumbs
-  const currentFolder = folders.find((f) => f.id === currentFolderId);
+  const currentFolder = safeFolders.find((f) => f.id === currentFolderId);
 
   const getBreadcrumbs = () => {
     const crumbs = [{ id: null, name: 'My Cloud' }];
     if (!currentFolderId) return crumbs;
 
     const findPath = (targetId) => {
-      const f = folders.find((item) => item.id === targetId);
+      const f = safeFolders.find((item) => item.id === targetId);
       if (!f) return;
       if (f.parent_id) findPath(f.parent_id);
       crumbs.push({ id: f.id, name: f.name });
@@ -86,30 +90,30 @@ export default function FileExplorer({
   };
 
   // Active child folders in current folder
-  const activeSubfolders = folders.filter((f) => {
+  const activeSubfolders = safeFolders.filter((f) => {
     if (f.is_trash) return false;
     if (!currentFolderId) return !f.parent_id;
     return f.parent_id === currentFolderId;
   });
 
   // Trashed folders in Recycle Bin
-  const trashedFolders = folders.filter((f) => f.is_trash === 1);
+  const trashedFolders = safeFolders.filter((f) => f.is_trash === 1);
 
   // Toggle selection
   const toggleSelectFile = (id, e) => {
     e.stopPropagation();
-    if (selectedFiles.includes(id)) {
-      setSelectedFiles(selectedFiles.filter((item) => item !== id));
+    if (safeSelectedFiles.includes(id)) {
+      setSelectedFiles(safeSelectedFiles.filter((item) => item !== id));
     } else {
-      setSelectedFiles([...selectedFiles, id]);
+      setSelectedFiles([...safeSelectedFiles, id]);
     }
   };
 
   const toggleSelectAll = () => {
-    if (selectedFiles.length === files.length) {
+    if (safeSelectedFiles.length === safeFiles.length) {
       setSelectedFiles([]);
     } else {
-      setSelectedFiles(files.map((f) => f.id));
+      setSelectedFiles(safeFiles.map((f) => f.id));
     }
   };
 
