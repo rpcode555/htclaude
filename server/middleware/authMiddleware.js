@@ -13,7 +13,7 @@ if (fs.existsSync(serverEnvPath)) {
   dotenv.config();
 }
 
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'palranjan144@gmail.com').toLowerCase();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const tokenCache = new Map(); // In-memory cache for valid tokens (TTL: 5 minutes) to avoid network overhead
 
 async function requireAdminAuth(req, res, next) {
@@ -37,13 +37,19 @@ async function requireAdminAuth(req, res, next) {
 
     // Check fast cache
     const cached = tokenCache.get(idToken);
-    if (cached && cached.expiry > Date.now() && cached.email === ADMIN_EMAIL) {
+    if (cached && cached.expiry > Date.now() && (!ADMIN_EMAIL || cached.email === ADMIN_EMAIL)) {
       req.user = cached;
       return next();
     }
 
     // Cryptographic verification via Google Identity Toolkit
-    const apiKey = process.env.FIREBASE_API_KEY || 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
+    const apiKey = process.env.FIREBASE_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        error: 'Server configuration error: FIREBASE_API_KEY is not configured.',
+      });
+    }
 
     const verifyRes = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,

@@ -13,7 +13,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 
 const AuthContext = createContext();
 
-export const ADMIN_EMAIL = 'palranjan144@gmail.com';
+export const ADMIN_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL || '').toLowerCase();
 
 export function useAuth() {
   return useContext(AuthContext);
@@ -23,11 +23,30 @@ export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState('');
+  const [configuredAdminEmail, setConfiguredAdminEmail] = useState(ADMIN_EMAIL);
 
   useEffect(() => {
+    // Fetch live backend config to sync dynamic whitelist without hardcoded secrets
+    fetch('/api/config/firebase')
+      .then((r) => r.json())
+      .then((config) => {
+        if (config.adminEmail) {
+          setConfiguredAdminEmail(config.adminEmail.toLowerCase());
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        if (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+        if (user.email && targetAdmin && user.email.toLowerCase() === targetAdmin) {
+          setCurrentUser(user);
+          setAuthError('');
+        } else if (!targetAdmin) {
+          // If no admin email is configured yet, allow authenticated user to proceed
           setCurrentUser(user);
           setAuthError('');
         } else {
@@ -35,7 +54,7 @@ export function AuthProvider({ children }) {
           console.warn(`[Security] Unauthorized access attempt by: ${user.email}`);
           await signOut(auth);
           setCurrentUser(null);
-          setAuthError(`Access Denied: ${user.email} is not authorized. Only ${ADMIN_EMAIL} can access this private storage.`);
+          setAuthError(`Access Denied: ${user.email} is not authorized. Only the administrator can access this private storage.`);
         }
       } else {
         setCurrentUser(null);
@@ -44,19 +63,21 @@ export function AuthProvider({ children }) {
     });
 
     return unsubscribe;
-  }, []);
+  }, [configuredAdminEmail]);
 
   // Email/Password Signin with strict whitelist validation
   const loginWithEmail = async (email, password) => {
     setAuthError('');
-    if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-      throw new Error(`Access Denied: Only ${ADMIN_EMAIL} is authorized to access this private system.`);
+    const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
+
+    if (targetAdmin && email.trim().toLowerCase() !== targetAdmin) {
+      throw new Error(`Access Denied: Only the administrator is authorized to access this private system.`);
     }
 
     const res = await signInWithEmailAndPassword(auth, email.trim(), password);
-    if (res.user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    if (targetAdmin && res.user.email.toLowerCase() !== targetAdmin) {
       await signOut(auth);
-      throw new Error(`Access Denied: Only ${ADMIN_EMAIL} is authorized.`);
+      throw new Error(`Access Denied: You are not authorized.`);
     }
     return res;
   };
@@ -64,8 +85,10 @@ export function AuthProvider({ children }) {
   // Email/Password Signup (only permitted for the admin email)
   const signupWithEmail = async (email, password, displayName = '') => {
     setAuthError('');
-    if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-      throw new Error(`Registration Denied: Only ${ADMIN_EMAIL} is authorized.`);
+    const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
+
+    if (targetAdmin && email.trim().toLowerCase() !== targetAdmin) {
+      throw new Error(`Registration Denied: Only the administrator is authorized.`);
     }
 
     const res = await createUserWithEmailAndPassword(auth, email.trim(), password);
