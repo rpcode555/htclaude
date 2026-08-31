@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const cloudDbService = require('./services/cloudDbService');
 const firestoreService = require('./services/firestoreService');
 
 const { DATA_DIR } = require('./config/paths');
@@ -66,17 +67,18 @@ const defaultData = {
 class Database {
   constructor() {
     this.data = this.loadData();
+    this.lastCloudSync = 0;
     if (!this.data.api_keys) {
       this.data.api_keys = [];
       this.saveData();
     }
-    // Background sync from Firebase Firestore
-    this.syncFromFirestore().catch(() => {});
+    // Background cloud sync on startup
+    this.syncFromCloud().catch(() => {});
   }
 
-  async syncFromFirestore() {
+  async syncFromCloud() {
     try {
-      const cloudData = await firestoreService.fetchAllData();
+      const cloudData = await cloudDbService.fetchAll();
       if (cloudData) {
         if (Array.isArray(cloudData.files)) {
           this.data.files = cloudData.files;
@@ -90,11 +92,11 @@ class Database {
         if (Array.isArray(cloudData.api_keys)) {
           this.data.api_keys = cloudData.api_keys;
         }
+        this.lastCloudSync = Date.now();
         this.saveData(this.data, true);
-        console.log('[Firestore] Synced metadata successfully from Firebase Cloud Database.');
       }
     } catch (err) {
-      console.warn('[Firestore] Sync notice:', err.message);
+      console.warn('[CloudDB] Sync notice:', err.message);
     }
   }
 
@@ -149,17 +151,22 @@ class Database {
   async setSetting(key, value) {
     this.data.settings[key] = value;
     this.saveData(this.data, true);
-    firestoreService.setDocument('htc_meta', 'settings', this.data.settings).catch(() => {});
+    cloudDbService.saveSettings(this.data.settings).catch(() => {});
     return value;
   }
 
   async getAllSettings() {
+    if (!this.data.settings || Date.now() - this.lastCloudSync > 60000) {
+      await this.syncFromCloud();
+    }
     return { ...this.data.settings };
   }
 
   // --- Folders ---
   async getFolders(includeTrash = true) {
-    this.data = this.loadData();
+    if (!this.data.folders || this.data.folders.length === 0 || Date.now() - this.lastCloudSync > 5000) {
+      await this.syncFromCloud();
+    }
     const list = includeTrash
       ? (this.data.folders || [])
       : (this.data.folders || []).filter((f) => !f.is_trash);
@@ -177,7 +184,7 @@ class Database {
   }
 
   async getFolderById(id) {
-    return this.data.folders.find((f) => f.id === id) || null;
+    return (this.data.folders || []).find((f) => f.id === id) || null;
   }
 
   async createFolder(nameOrObj, parent_id = null, color = '#3b82f6', icon = 'folder') {
@@ -205,36 +212,36 @@ class Database {
     };
     this.data.folders.push(newFolder);
     this.saveData();
-    firestoreService.setDocument('htc_folders', newFolder.id, newFolder).catch(() => {});
+    await cloudDbService.saveFolder(newFolder);
     return newFolder;
   }
 
   async updateFolder(id, updates) {
-    const folder = this.data.folders.find((f) => f.id === id);
+    const folder = (this.data.folders || []).find((f) => f.id === id);
     if (!folder) return null;
     Object.assign(folder, updates, { updated_at: new Date().toISOString() });
     this.saveData();
-    firestoreService.setDocument('htc_folders', folder.id, folder).catch(() => {});
+    await cloudDbService.saveFolder(folder);
     return folder;
   }
 
   async deleteFolder(id, permanent = false) {
     if (permanent) {
-      this.data.folders = this.data.folders.filter((f) => f.id !== id);
-      firestoreService.deleteDocument('htc_folders', id).catch(() => {});
+      this.data.folders = (this.data.folders || []).filter((f) => f.id !== id);
+      await cloudDbService.deleteFolder(id, true);
     } else {
-      const folder = this.data.folders.find((f) => f.id === id);
+      const folder = (this.data.folders || []).find((f) => f.id === id);
       if (folder) {
         folder.is_trash = 1;
         folder.updated_at = new Date().toISOString();
-        firestoreService.setDocument('htc_folders', id, folder).catch(() => {});
+        await cloudDbService.deleteFolder(id, false);
       }
       // Also move all files in this folder to Recycle Bin
-      for (const file of this.data.files) {
+      for (const file of (this.data.files || [])) {
         if (file.folder_id === id) {
           file.is_trash = 1;
           file.updated_at = new Date().toISOString();
-          firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
+          cloudDbService.saveFile(file).catch(() => {});
         }
       }
     }
@@ -243,18 +250,18 @@ class Database {
   }
 
   async restoreFolder(id) {
-    const folder = this.data.folders.find((f) => f.id === id);
+    const folder = (this.data.folders || []).find((f) => f.id === id);
     if (folder) {
       folder.is_trash = 0;
       folder.updated_at = new Date().toISOString();
-      firestoreService.setDocument('htc_folders', id, folder).catch(() => {});
+      await cloudDbService.saveFolder(folder);
     }
     // Also restore all files in this folder
-    for (const file of this.data.files) {
+    for (const file of (this.data.files || [])) {
       if (file.folder_id === id) {
         file.is_trash = 0;
         file.updated_at = new Date().toISOString();
-        firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
+        cloudDbService.saveFile(file).catch(() => {});
       }
     }
     this.saveData();
@@ -263,8 +270,10 @@ class Database {
 
   // --- Files ---
   async getFiles({ folder_id, category, filter = 'all', search = '', sortBy = 'created_at', sortOrder = 'desc' } = {}) {
-    this.data = this.loadData();
-    let result = [...this.data.files];
+    if (!this.data.files || this.data.files.length === 0 || Date.now() - this.lastCloudSync > 3000) {
+      await this.syncFromCloud();
+    }
+    let result = [...(this.data.files || [])];
 
     // Trash filter
     if (filter === 'trash') {
@@ -329,11 +338,16 @@ class Database {
   }
 
   async getFileById(id) {
-    return this.data.files.find((f) => f.id === id) || null;
+    let found = (this.data.files || []).find((f) => f.id === id);
+    if (!found) {
+      await this.syncFromCloud();
+      found = (this.data.files || []).find((f) => f.id === id);
+    }
+    return found || null;
   }
 
   async getFileByTelegramMsgId(msgId) {
-    return this.data.files.find((f) => f.telegram_msg_id === msgId) || null;
+    return (this.data.files || []).find((f) => f.telegram_msg_id === msgId) || null;
   }
 
   async insertFile(file) {
@@ -358,69 +372,71 @@ class Database {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    this.data.files.push(newFile);
+    this.data.files = [newFile, ...(this.data.files || []).filter((f) => f.id !== newFile.id)];
     this.saveData();
-    firestoreService.setDocument('htc_files', newFile.id, newFile).catch(() => {});
+    await cloudDbService.saveFile(newFile);
     return newFile;
   }
 
   async updateFile(id, updates) {
-    const file = this.data.files.find((f) => f.id === id);
+    const file = (this.data.files || []).find((f) => f.id === id);
     if (!file) return null;
     Object.assign(file, updates, { updated_at: new Date().toISOString() });
     this.saveData();
-    firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
+    await cloudDbService.saveFile(file);
     return file;
   }
 
   async deleteFile(id, trashOnly = true) {
     if (trashOnly) {
-      const file = this.data.files.find((f) => f.id === id);
+      const file = (this.data.files || []).find((f) => f.id === id);
       if (file) {
         file.is_trash = 1;
         file.updated_at = new Date().toISOString();
-        firestoreService.setDocument('htc_files', id, file).catch(() => {});
+        await cloudDbService.deleteFile(id, false);
       }
     } else {
-      this.data.files = this.data.files.filter((f) => f.id !== id);
-      firestoreService.deleteDocument('htc_files', id).catch(() => {});
+      this.data.files = (this.data.files || []).filter((f) => f.id !== id);
+      await cloudDbService.deleteFile(id, true);
     }
     this.saveData();
     return true;
   }
 
   async restoreFile(id) {
-    const file = this.data.files.find((f) => f.id === id);
+    const file = (this.data.files || []).find((f) => f.id === id);
     if (file) {
       file.is_trash = 0;
       file.updated_at = new Date().toISOString();
-      firestoreService.setDocument('htc_files', id, file).catch(() => {});
+      await cloudDbService.saveFile(file);
     }
     this.saveData();
     return file;
   }
 
   async emptyTrash() {
-    const trashedFiles = this.data.files.filter((f) => f.is_trash === 1);
+    const trashedFiles = (this.data.files || []).filter((f) => f.is_trash === 1);
     for (const f of trashedFiles) {
-      firestoreService.deleteDocument('htc_files', f.id).catch(() => {});
+      cloudDbService.deleteFile(f.id, true).catch(() => {});
     }
-    this.data.files = this.data.files.filter((f) => !f.is_trash);
-    this.data.folders = this.data.folders.filter((f) => !f.is_trash);
+    this.data.files = (this.data.files || []).filter((f) => !f.is_trash);
+    this.data.folders = (this.data.folders || []).filter((f) => !f.is_trash);
     this.saveData();
     return { count: trashedFiles.length, trashedFiles };
   }
 
   // --- API Keys Management ---
   async getApiKeys() {
-    this.data = this.loadData();
+    if (!this.data.api_keys || this.data.api_keys.length === 0 || Date.now() - this.lastCloudSync > 5000) {
+      await this.syncFromCloud();
+    }
     return this.data.api_keys || [];
   }
 
   async getApiKeyById(id) {
     let found = (this.data.api_keys || []).find((k) => k.id === id);
     if (!found) {
-      this.data = this.loadData();
+      await this.syncFromCloud();
       found = (this.data.api_keys || []).find((k) => k.id === id);
     }
     return found || null;
@@ -429,7 +445,7 @@ class Database {
   async getApiKeyByKey(key) {
     let found = (this.data.api_keys || []).find((k) => k.key === key);
     if (!found) {
-      this.data = this.loadData();
+      await this.syncFromCloud();
       found = (this.data.api_keys || []).find((k) => k.key === key);
     }
     return found || null;
@@ -480,7 +496,7 @@ class Database {
     };
     this.data.api_keys.push(newApiKey);
     this.saveData();
-    firestoreService.setDocument('htc_api_keys', newApiKey.id, newApiKey).catch(() => {});
+    await cloudDbService.saveApiKey(newApiKey);
     return newApiKey;
   }
 
