@@ -30,14 +30,21 @@ export function AuthProvider({ children }) {
     fetch('/api/config/firebase')
       .then((r) => r.json())
       .then((config) => {
-        if (config.adminEmail) {
+        if (config && config.adminEmail) {
           setConfiguredAdminEmail(config.adminEmail.toLowerCase());
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn('[Auth] Failed to load server config:', err.message);
+      });
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
     const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -46,7 +53,7 @@ export function AuthProvider({ children }) {
           setCurrentUser(user);
           setAuthError('');
         } else if (!targetAdmin) {
-          // If no admin email is configured yet, allow authenticated user to proceed
+          // If no admin email is restricted, allow authenticated user to proceed
           setCurrentUser(user);
           setAuthError('');
         } else {
@@ -54,7 +61,7 @@ export function AuthProvider({ children }) {
           console.warn(`[Security] Unauthorized access attempt by: ${user.email}`);
           await signOut(auth);
           setCurrentUser(null);
-          setAuthError(`Access Denied: ${user.email} is not authorized. Only the administrator can access this private storage.`);
+          setAuthError(`Access Denied: ${user.email} is not authorized. Only ${targetAdmin} can access this storage.`);
         }
       } else {
         setCurrentUser(null);
@@ -68,10 +75,12 @@ export function AuthProvider({ children }) {
   // Email/Password Signin with strict whitelist validation
   const loginWithEmail = async (email, password) => {
     setAuthError('');
+    if (!auth) throw new Error('Firebase Auth is not initialized. Please verify configuration.');
+
     const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
 
     if (targetAdmin && email.trim().toLowerCase() !== targetAdmin) {
-      throw new Error(`Access Denied: Only the administrator is authorized to access this private system.`);
+      throw new Error(`Access Denied: Only ${targetAdmin} is authorized to access this private system.`);
     }
 
     const res = await signInWithEmailAndPassword(auth, email.trim(), password);
@@ -85,10 +94,12 @@ export function AuthProvider({ children }) {
   // Email/Password Signup (only permitted for the admin email)
   const signupWithEmail = async (email, password, displayName = '') => {
     setAuthError('');
+    if (!auth) throw new Error('Firebase Auth is not initialized. Please verify configuration.');
+
     const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
 
     if (targetAdmin && email.trim().toLowerCase() !== targetAdmin) {
-      throw new Error(`Registration Denied: Only the administrator is authorized.`);
+      throw new Error(`Registration Denied: Only ${targetAdmin} is authorized.`);
     }
 
     const res = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -101,11 +112,17 @@ export function AuthProvider({ children }) {
   // Google Sign-In with strict whitelist check
   const loginWithGoogle = async () => {
     setAuthError('');
+    if (!auth || !googleProvider) {
+      throw new Error('Google Sign-In is not initialized. Please verify Firebase environment variables.');
+    }
+
+    const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
     const res = await signInWithPopup(auth, googleProvider);
-    if (!res.user.email || res.user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+
+    if (targetAdmin && (!res.user.email || res.user.email.toLowerCase() !== targetAdmin)) {
       const attemptedEmail = res.user.email || 'unknown';
       await signOut(auth);
-      throw new Error(`Access Denied: Account (${attemptedEmail}) is not authorized. Please log in with ${ADMIN_EMAIL}.`);
+      throw new Error(`Access Denied: Account (${attemptedEmail}) is not authorized. Only ${targetAdmin} is permitted.`);
     }
     return res;
   };
@@ -113,18 +130,23 @@ export function AuthProvider({ children }) {
   // Signout
   const logout = () => {
     setAuthError('');
+    if (!auth) return Promise.resolve();
     return signOut(auth);
   };
 
   // Password Reset
   const resetPassword = (email) => {
-    if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-      throw new Error(`Password reset is only permitted for ${ADMIN_EMAIL}.`);
+    if (!auth) throw new Error('Firebase Auth is not initialized.');
+    const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
+
+    if (targetAdmin && email.trim().toLowerCase() !== targetAdmin) {
+      throw new Error(`Password reset is only permitted for ${targetAdmin}.`);
     }
     return sendPasswordResetEmail(auth, email.trim());
   };
 
-  const isAuthorized = currentUser && currentUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const targetAdmin = (configuredAdminEmail || ADMIN_EMAIL || '').toLowerCase();
+  const isAuthorized = !!currentUser && (!targetAdmin || currentUser.email?.toLowerCase() === targetAdmin);
 
   const value = {
     currentUser,
@@ -132,7 +154,7 @@ export function AuthProvider({ children }) {
     isAuthorized,
     authError,
     setAuthError,
-    adminEmail: ADMIN_EMAIL,
+    adminEmail: targetAdmin || ADMIN_EMAIL,
     signupWithEmail,
     loginWithEmail,
     loginWithGoogle,
@@ -140,9 +162,5 @@ export function AuthProvider({ children }) {
     resetPassword,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

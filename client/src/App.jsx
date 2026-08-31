@@ -364,12 +364,29 @@ function MainApp() {
       setSelectedFiles([]);
       await loadFiles();
       await loadData();
-} catch (err) {
+    } catch (err) {
       alert(err.message);
     }
   };
 
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen w-screen bg-[#060911] flex flex-col items-center justify-center space-y-4 select-none">
+        <div className="w-14 h-14 rounded-3xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center shadow-2xl shadow-cyan-500/20">
+          <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+        </div>
+        <p className="text-xs text-slate-400 font-mono tracking-widest uppercase animate-pulse">
+          Authenticating &bull; HT Claude
+        </p>
+      </div>
+    );
+  }
+
+  if (!isAuthorized) {
+    return <AuthGate />;
+  }
 
   return (
     <div
