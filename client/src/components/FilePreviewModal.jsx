@@ -82,17 +82,17 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
     setFitMode('fit');
   }, [file?.id, streamUrl]);
 
-  if (!file) return null;
-
-  const isTextLike =
+  const isTextLike = Boolean(
+    file &&
     file.category === 'documents' &&
-    (file.mime_type.includes('text') ||
-      file.mime_type.includes('json') ||
-      file.mime_type.includes('javascript') ||
-      /\.(txt|md|js|ts|jsx|tsx|json|html|css|py|csv|env|log)$/i.test(file.name));
+    (file.mime_type?.includes('text') ||
+      file.mime_type?.includes('json') ||
+      file.mime_type?.includes('javascript') ||
+      /\.(txt|md|js|ts|jsx|tsx|json|html|css|py|csv|env|log)$/i.test(file.name || ''))
+  );
 
   useEffect(() => {
-    if (isTextLike && streamUrl) {
+    if (file && isTextLike && streamUrl) {
       setLoadingText(true);
       fetch(streamUrl)
         .then((r) => r.text())
@@ -105,7 +105,9 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
           setLoadingText(false);
         });
     }
-  }, [file.id, isTextLike, streamUrl]);
+  }, [file?.id, isTextLike, streamUrl]);
+
+  if (!file) return null;
 
   const handleCopyText = () => {
     if (textContent) {

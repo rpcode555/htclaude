@@ -17,6 +17,7 @@ import { useConfirm } from './context/ConfirmContext';
 
 function MainApp() {
   const { isAuthorized, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
 
   // Navigation & Filter States
   const [currentView, setCurrentView] = useState('all'); // 'all' | 'recent' | 'starred' | 'trash' | 'category' | 'admin' | 'developer'
@@ -26,6 +27,7 @@ function MainApp() {
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
   const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Data States
   const [files, setFiles] = useState([]);
@@ -125,24 +127,6 @@ function MainApp() {
     }
   }, [isAuthorized, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
 
-  // If user is not authenticated/authorized as palranjan144@gmail.com, show strict full-screen AuthGate
-  if (authLoading) {
-    return (
-      <div className="h-screen w-screen bg-[var(--bg-app)] flex items-center justify-center text-cyan-400">
-        <div className="flex flex-col items-center gap-3 animate-pulse">
-          <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center">
-            <span className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-          </div>
-          <p className="text-xs font-semibold text-slate-400 font-mono">Verifying Authentication Gate...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthorized) {
-    return <AuthGate />;
-  }
-
   // Upload Handler
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
@@ -213,8 +197,6 @@ function MainApp() {
       alert(`Could not create folder: ${err.message}`);
     }
   };
-
-  const confirm = useConfirm();
 
   const handleDeleteFolder = async (folderId) => {
     const ok = await confirm({
@@ -368,8 +350,6 @@ function MainApp() {
       alert(err.message);
     }
   };
-
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   if (authLoading) {
     return (
