@@ -583,7 +583,7 @@ function MainApp() {
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, errorInfo: null };
   }
 
   static getDerivedStateFromError(error) {
@@ -592,6 +592,7 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[React Error Boundary Caught]:', error, errorInfo);
+    this.setState({ errorInfo });
   }
 
   render() {
@@ -603,16 +604,31 @@ class ErrorBoundary extends React.Component {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <h2 className="text-xl font-bold text-white mb-2">Something went wrong</h2>
-          <p className="text-xs text-slate-400 max-w-md mb-6">
-            An unexpected error occurred while rendering the application interface.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 hover:from-cyan-400 hover:to-blue-500 transition-all cursor-pointer"
-          >
-            Reload Application
-          </button>
+          <h2 className="text-xl font-bold text-white mb-1">Interface Render Warning</h2>
+          <div className="w-full max-w-xl text-left bg-slate-900/90 border border-red-500/30 rounded-2xl p-4 my-3 font-mono text-xs text-red-300 overflow-x-auto space-y-2 shadow-2xl">
+            <p className="font-bold text-red-400 text-sm">
+              {this.state.error?.name || 'Error'}: {this.state.error?.message || String(this.state.error)}
+            </p>
+            {this.state.error?.stack && (
+              <pre className="text-[11px] text-slate-400 opacity-80 whitespace-pre-wrap font-mono max-h-36 overflow-y-auto">
+                {this.state.error.stack.split('\n').slice(0, 6).join('\n')}
+              </pre>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-1">
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all cursor-pointer"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 hover:from-cyan-400 hover:to-blue-500 transition-all cursor-pointer"
+            >
+              Reload Application
+            </button>
+          </div>
         </div>
       );
     }

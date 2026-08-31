@@ -50,7 +50,7 @@ export default function MoveModal({ isOpen, onClose, folders, onMove, selectedCo
                 <span>My Cloud (Root)</span>
               </button>
 
-              {folders.map((f) => (
+              {(folders || []).map((f) => (
                 <button
                   key={f.id}
                   type="button"
