@@ -21,6 +21,7 @@ import {
   Maximize2,
   Minimize2,
   StretchHorizontal,
+  Trash2,
 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
