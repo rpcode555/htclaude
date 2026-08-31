@@ -10,6 +10,7 @@ import {
   sendPasswordResetEmail,
   updateProfile,
 } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 
 // Firebase Web Client Public Configuration (Overrides from VITE_FIREBASE_* if present)
@@ -26,11 +27,13 @@ const firebaseConfig = {
 // Safely initialize Firebase App
 let app = null;
 let auth = null;
+let db = null;
 let googleProvider = null;
 
 try {
   app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
   auth = getAuth(app);
+  db = getFirestore(app);
   googleProvider = new GoogleAuthProvider();
   googleProvider.setCustomParameters({ prompt: 'select_account' });
 } catch (err) {
@@ -52,6 +55,7 @@ if (typeof window !== 'undefined' && app) {
 export {
   app,
   auth,
+  db,
   googleProvider,
   analytics,
   signInWithPopup,

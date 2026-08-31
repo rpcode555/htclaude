@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const firestoreService = require('./services/firestoreService');
 
 const { DATA_DIR } = require('./config/paths');
 const DB_FILE = path.join(DATA_DIR, 'telecloud_db.json');
@@ -69,6 +70,32 @@ class Database {
       this.data.api_keys = [];
       this.saveData();
     }
+    // Background sync from Firebase Firestore
+    this.syncFromFirestore().catch(() => {});
+  }
+
+  async syncFromFirestore() {
+    try {
+      const cloudData = await firestoreService.fetchAllData();
+      if (cloudData) {
+        if (Array.isArray(cloudData.files)) {
+          this.data.files = cloudData.files;
+        }
+        if (Array.isArray(cloudData.folders) && cloudData.folders.length > 0) {
+          this.data.folders = cloudData.folders;
+        }
+        if (cloudData.settings && Object.keys(cloudData.settings).length > 0) {
+          this.data.settings = { ...this.data.settings, ...cloudData.settings };
+        }
+        if (Array.isArray(cloudData.api_keys)) {
+          this.data.api_keys = cloudData.api_keys;
+        }
+        this.saveData(this.data, true);
+        console.log('[Firestore] Synced metadata successfully from Firebase Cloud Database.');
+      }
+    } catch (err) {
+      console.warn('[Firestore] Sync notice:', err.message);
+    }
   }
 
   loadData() {
@@ -122,6 +149,7 @@ class Database {
   async setSetting(key, value) {
     this.data.settings[key] = value;
     this.saveData(this.data, true);
+    firestoreService.setDocument('htc_meta', 'settings', this.data.settings).catch(() => {});
     return value;
   }
 
@@ -177,6 +205,7 @@ class Database {
     };
     this.data.folders.push(newFolder);
     this.saveData();
+    firestoreService.setDocument('htc_folders', newFolder.id, newFolder).catch(() => {});
     return newFolder;
   }
 
@@ -185,23 +214,27 @@ class Database {
     if (!folder) return null;
     Object.assign(folder, updates, { updated_at: new Date().toISOString() });
     this.saveData();
+    firestoreService.setDocument('htc_folders', folder.id, folder).catch(() => {});
     return folder;
   }
 
   async deleteFolder(id, permanent = false) {
     if (permanent) {
       this.data.folders = this.data.folders.filter((f) => f.id !== id);
+      firestoreService.deleteDocument('htc_folders', id).catch(() => {});
     } else {
       const folder = this.data.folders.find((f) => f.id === id);
       if (folder) {
         folder.is_trash = 1;
         folder.updated_at = new Date().toISOString();
+        firestoreService.setDocument('htc_folders', id, folder).catch(() => {});
       }
       // Also move all files in this folder to Recycle Bin
       for (const file of this.data.files) {
         if (file.folder_id === id) {
           file.is_trash = 1;
           file.updated_at = new Date().toISOString();
+          firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
         }
       }
     }
@@ -214,12 +247,14 @@ class Database {
     if (folder) {
       folder.is_trash = 0;
       folder.updated_at = new Date().toISOString();
+      firestoreService.setDocument('htc_folders', id, folder).catch(() => {});
     }
     // Also restore all files in this folder
     for (const file of this.data.files) {
       if (file.folder_id === id) {
         file.is_trash = 0;
         file.updated_at = new Date().toISOString();
+        firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
       }
     }
     this.saveData();
@@ -325,6 +360,7 @@ class Database {
     };
     this.data.files.push(newFile);
     this.saveData();
+    firestoreService.setDocument('htc_files', newFile.id, newFile).catch(() => {});
     return newFile;
   }
 
@@ -333,6 +369,7 @@ class Database {
     if (!file) return null;
     Object.assign(file, updates, { updated_at: new Date().toISOString() });
     this.saveData();
+    firestoreService.setDocument('htc_files', file.id, file).catch(() => {});
     return file;
   }
 
@@ -342,9 +379,11 @@ class Database {
       if (file) {
         file.is_trash = 1;
         file.updated_at = new Date().toISOString();
+        firestoreService.setDocument('htc_files', id, file).catch(() => {});
       }
     } else {
       this.data.files = this.data.files.filter((f) => f.id !== id);
+      firestoreService.deleteDocument('htc_files', id).catch(() => {});
     }
     this.saveData();
     return true;
@@ -355,6 +394,7 @@ class Database {
     if (file) {
       file.is_trash = 0;
       file.updated_at = new Date().toISOString();
+      firestoreService.setDocument('htc_files', id, file).catch(() => {});
     }
     this.saveData();
     return file;
@@ -362,6 +402,9 @@ class Database {
 
   async emptyTrash() {
     const trashedFiles = this.data.files.filter((f) => f.is_trash === 1);
+    for (const f of trashedFiles) {
+      firestoreService.deleteDocument('htc_files', f.id).catch(() => {});
+    }
     this.data.files = this.data.files.filter((f) => !f.is_trash);
     this.data.folders = this.data.folders.filter((f) => !f.is_trash);
     this.saveData();
@@ -437,6 +480,7 @@ class Database {
     };
     this.data.api_keys.push(newApiKey);
     this.saveData();
+    firestoreService.setDocument('htc_api_keys', newApiKey.id, newApiKey).catch(() => {});
     return newApiKey;
   }
 
