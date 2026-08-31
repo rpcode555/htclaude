@@ -179,17 +179,14 @@ export const api = {
     return await res.json();
   },
 
-  async uploadFilesWithProgress(files, folder_id, onProgress) {
+  async uploadSingleFile(file, folder_id, onProgress) {
     const user = auth.currentUser;
     const token = user ? await user.getIdToken() : '';
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const formData = new FormData();
-
-      for (let i = 0; i < files.length; i++) {
-        formData.append('files', files[i]);
-      }
+      formData.append('files', file);
       if (folder_id) {
         formData.append('folder_id', folder_id);
       }
@@ -210,12 +207,12 @@ export const api = {
           try {
             resolve(JSON.parse(xhr.responseText));
           } catch (e) {
-            resolve({ success: true });
+            resolve({ success: true, files: [] });
           }
         } else {
           try {
             const errJson = JSON.parse(xhr.responseText);
-            reject(new Error(errJson.error || 'Upload failed'));
+            reject(new Error(errJson.error || `Upload failed with status ${xhr.status}`));
           } catch (e) {
             reject(new Error(`Upload failed with status ${xhr.status}`));
           }
@@ -231,6 +228,40 @@ export const api = {
       }
       xhr.send(formData);
     });
+  },
+
+  async uploadFilesWithProgress(files, folder_id, onProgress, onFileComplete) {
+    const fileArray = Array.from(files);
+    const totalFiles = fileArray.length;
+    const allUploadedRecords = [];
+
+    for (let i = 0; i < totalFiles; i++) {
+      const currentFile = fileArray[i];
+      const res = await this.uploadSingleFile(currentFile, folder_id, (fileProgress) => {
+        if (onProgress) {
+          const overallPercent = Math.round(((i + (fileProgress.percent / 100)) / totalFiles) * 100);
+          onProgress({
+            fileIndex: i,
+            totalFiles,
+            currentFileName: currentFile.name,
+            filePercent: fileProgress.percent,
+            percent: overallPercent,
+          });
+        }
+      });
+
+      if (res && res.files && res.files.length > 0) {
+        allUploadedRecords.push(...res.files);
+        if (onFileComplete) {
+          onFileComplete(res.files, i);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      files: allUploadedRecords,
+    };
   },
 
   getDownloadUrl(fileId) {

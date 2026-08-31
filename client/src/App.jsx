@@ -141,7 +141,8 @@ function MainApp() {
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
 
-    const items = Array.from(fileList).map((f) => ({
+    const fileArray = Array.from(fileList);
+    const items = fileArray.map((f) => ({
       name: f.name,
       size: f.size,
       status: 'uploading',
@@ -149,7 +150,7 @@ function MainApp() {
 
     setUploadQueue(items);
     setIsUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(5);
 
     try {
       const uploadRes = await api.uploadFilesWithProgress(
@@ -157,6 +158,28 @@ function MainApp() {
         currentFolderId,
         (progress) => {
           setUploadProgress(progress.percent);
+          if (progress.fileIndex !== undefined) {
+            setUploadQueue((prev) =>
+              prev.map((item, idx) => {
+                if (idx < progress.fileIndex) return { ...item, status: 'done' };
+                if (idx === progress.fileIndex) return { ...item, status: 'uploading' };
+                return item;
+              })
+            );
+          }
+        },
+        (newUploadedFiles, fileIndex) => {
+          // Immediately show each finished file on the dashboard right away!
+          if (newUploadedFiles && newUploadedFiles.length > 0) {
+            setFiles((prev) => {
+              const existingIds = new Set(prev.map((f) => f.id));
+              const freshItems = newUploadedFiles.filter((f) => !existingIds.has(f.id));
+              return [...freshItems, ...prev];
+            });
+          }
+          setUploadQueue((prev) =>
+            prev.map((item, idx) => (idx === fileIndex ? { ...item, status: 'done' } : item))
+          );
         }
       );
 
