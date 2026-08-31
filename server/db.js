@@ -249,10 +249,14 @@ class Database {
       result = result.filter((f) => f.created_at >= sevenDaysAgo);
     }
 
+    const activeFolderIds = new Set(
+      (this.data.folders || []).filter((f) => !f.is_trash).map((f) => f.id)
+    );
+
     // Folder filter
     if (folder_id !== undefined && filter !== 'trash' && filter !== 'starred' && filter !== 'recent') {
       if (folder_id === null || folder_id === 'root') {
-        result = result.filter((f) => !f.folder_id);
+        result = result.filter((f) => !f.folder_id || !activeFolderIds.has(f.folder_id));
       } else {
         result = result.filter((f) => f.folder_id === folder_id);
       }
