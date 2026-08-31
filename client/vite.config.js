@@ -20,6 +20,7 @@ export default defineConfig(({ mode }) => {
     'import.meta.env.VITE_FIREBASE_APP_ID': JSON.stringify(env.VITE_FIREBASE_APP_ID || env.FIREBASE_APP_ID || ''),
     'import.meta.env.VITE_FIREBASE_MEASUREMENT_ID': JSON.stringify(env.VITE_FIREBASE_MEASUREMENT_ID || env.FIREBASE_MEASUREMENT_ID || ''),
     'import.meta.env.VITE_ADMIN_EMAIL': JSON.stringify(env.VITE_ADMIN_EMAIL || env.ADMIN_EMAIL || ''),
+    'import.meta.env.VITE_API_BASE': JSON.stringify(env.VITE_API_BASE || env.API_BASE || '/api'),
   };
 
   return {

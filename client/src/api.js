@@ -2,7 +2,7 @@
 
 import { auth } from './firebase';
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
 
 async function getAuthHeader() {
   const user = auth.currentUser;
