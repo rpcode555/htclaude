@@ -15,14 +15,14 @@ try {
 
 const defaultData = {
   settings: {
-    auth_type: 'demo', // 'demo' | 'saved_messages' | 'bot'
+    auth_type: process.env.TELEGRAM_AUTH_TYPE || 'bot',
     api_id: '',
     api_hash: '',
     session_string: '',
     phone_number: '',
     phone_code_hash: '',
-    bot_token: '',
-    chat_id: 'me',
+    bot_token: process.env.TELEGRAM_BOT_TOKEN || '8805033967:AAF2g0Uq8lNGxym31SDqL_gO-FrBAfETNv0',
+    chat_id: process.env.TELEGRAM_CHANNEL_ID || '-1002466857067',
     auto_backup: '0',
     storage_quota_gb: '10000', // Unlimited virtual
   },
