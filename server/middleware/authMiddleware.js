@@ -13,11 +13,17 @@ if (fs.existsSync(serverEnvPath)) {
   dotenv.config();
 }
 
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').toLowerCase();
 const tokenCache = new Map(); // In-memory cache for valid tokens (TTL: 5 minutes) to avoid network overhead
+
+function getTargetAdminEmail() {
+  return (process.env.ADMIN_EMAIL || 'palranjan144@gmail.com').toLowerCase();
+}
 
 async function requireAdminAuth(req, res, next) {
   try {
+    if (req.method === 'OPTIONS') return next();
+
+    const targetAdmin = getTargetAdminEmail();
     const authHeader = req.headers.authorization || req.headers.Authorization;
     let idToken = null;
 
@@ -37,7 +43,7 @@ async function requireAdminAuth(req, res, next) {
 
     // Check fast cache
     const cached = tokenCache.get(idToken);
-    if (cached && cached.expiry > Date.now() && (!ADMIN_EMAIL || cached.email === ADMIN_EMAIL)) {
+    if (cached && cached.expiry > Date.now() && (!targetAdmin || cached.email === targetAdmin)) {
       req.user = cached;
       return next();
     }
@@ -73,11 +79,11 @@ async function requireAdminAuth(req, res, next) {
     const userEmail = (verifiedUser.email || '').toLowerCase();
 
     // Strict Admin Email Whitelist check
-    if (userEmail !== ADMIN_EMAIL) {
+    if (userEmail !== targetAdmin) {
       console.warn(`[Security Alert] Blocked unauthorized access attempt by: ${userEmail}`);
       return res.status(403).json({
         success: false,
-        error: `Forbidden: Access Denied. Only ${ADMIN_EMAIL} is authorized.`,
+        error: `Forbidden: Access Denied. Only ${targetAdmin} is authorized.`,
       });
     }
 
@@ -98,5 +104,5 @@ async function requireAdminAuth(req, res, next) {
 
 module.exports = {
   requireAdminAuth,
-  ADMIN_EMAIL,
+  getTargetAdminEmail,
 };

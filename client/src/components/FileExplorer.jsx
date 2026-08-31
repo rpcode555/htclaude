@@ -25,6 +25,7 @@ import {
   Plus,
   Upload,
 } from 'lucide-react';
+import { api } from '../api';
 import { formatBytes, formatDate, getFileCategoryColor } from '../utils';
 
 export default function FileExplorer({

@@ -24,6 +24,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../api';
 import { formatBytes, formatDate } from '../utils';
 
 export default function AdminPanel({
@@ -49,24 +50,15 @@ export default function AdminPanel({
     setTestingUpload(true);
     setTestResult('');
     try {
-      const formData = new FormData();
       const testContent = `Admin diagnostic test ping from Hightech Claude at ${new Date().toISOString()}`;
-      formData.append('files', new Blob([testContent], { type: 'text/plain' }), 'admin_diagnostic_ping.txt');
+      const testFile = new File([testContent], 'admin_diagnostic_ping.txt', { type: 'text/plain' });
 
-      const token = currentUser ? await currentUser.getIdToken() : '';
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-
-      const res = await fetch('/api/files/upload', {
-        method: 'POST',
-        headers,
-        body: formData,
-      });
-      const data = await res.json();
+      const data = await api.uploadFilesWithProgress([testFile], null);
       if (data.success) {
-        setTestResult(`✅ Test file uploaded to Telegram Channel! Message ID: #${data.files[0]?.telegram_msg_id || 'N/A'}`);
+        setTestResult(`✅ Test file uploaded to Telegram Channel! Message ID: #${data.files?.[0]?.telegram_msg_id || 'N/A'}`);
         await onRefreshData();
       } else {
-        setTestResult(`❌ Test upload failed: ${data.error}`);
+        setTestResult(`❌ Test upload failed: ${data.error || 'Unknown error'}`);
       }
     } catch (err) {
       setTestResult(`❌ Connection error: ${err.message}`);

@@ -50,7 +50,7 @@ class TelegramService {
    * Helper to retrieve channel ID securely from backend env / db
    */
   async getChannelId() {
-    const rawId = process.env.TELEGRAM_CHANNEL_ID || (await getSetting('chat_id')) || '';
+    const rawId = process.env.TELEGRAM_CHANNEL_ID || process.env.TELEGRAM_CHAT_ID || (await getSetting('chat_id')) || '';
     return normalizeChannelId(rawId);
   }
 
@@ -524,15 +524,19 @@ class TelegramService {
           });
 
           const json = await response.json();
-          if (json.ok && json.result.document) {
+          if (json.ok && json.result) {
+            const doc = json.result.document || json.result.video || json.result.audio || (json.result.photo ? json.result.photo[json.result.photo.length - 1] : null);
+            const fileId = doc ? doc.file_id : null;
+            const fileSize = (doc && doc.file_size) ? doc.file_size : size;
+
             console.log(`[Telegram] Uploaded ${originalName} to channel ${channelId} (msg_id: ${json.result.message_id})`);
             return {
               storageType: 'telegram',
               telegramMsgId: json.result.message_id,
               telegramChatId: channelId,
-              fileHash: json.result.document.file_id,
+              fileHash: fileId,
               localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
-              size: json.result.document.file_size || size,
+              size: fileSize,
             };
           } else {
             console.warn('[Telegram] Channel upload error response:', json);

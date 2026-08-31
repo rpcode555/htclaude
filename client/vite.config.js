@@ -23,6 +23,8 @@ export default defineConfig(({ mode }) => {
     'import.meta.env.VITE_API_BASE': JSON.stringify(env.VITE_API_BASE || env.API_BASE || '/api'),
   };
 
+  const apiTarget = env.VITE_API_TARGET || env.API_TARGET || `http://localhost:${env.PORT || 5000}`;
+
   return {
     define: firebaseEnv,
     plugins: [
@@ -34,7 +36,7 @@ export default defineConfig(({ mode }) => {
       host: true,
       proxy: {
         '/api': {
-          target: 'https://htclaude-etir.vercel.app/',
+          target: apiTarget,
           changeOrigin: true,
           secure: false,
         },

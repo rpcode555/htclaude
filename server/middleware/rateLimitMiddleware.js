@@ -22,12 +22,14 @@ setInterval(() => {
  */
 function createRateLimiter({ windowMs = 60 * 1000, maxRequests = 100, message = 'Too many requests. Please try again shortly.' } = {}) {
   return (req, res, next) => {
+    if (req.method === 'OPTIONS') return next();
+
     // Determine client IP reliably (supports Cloudflare, Vercel, Nginx proxies)
     const clientIp =
       req.headers['cf-connecting-ip'] ||
       req.headers['x-real-ip'] ||
       req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
+      req.socket?.remoteAddress ||
       '127.0.0.1';
 
     const now = Date.now();
