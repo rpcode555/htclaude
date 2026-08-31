@@ -127,6 +127,16 @@ function MainApp() {
     }
   }, [isAuthorized, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
 
+  // Real-time background sync interval (checks every 5s for live updates across devices/tabs)
+  useEffect(() => {
+    if (!isAuthorized) return;
+    const interval = setInterval(() => {
+      loadFiles();
+      loadData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isAuthorized, currentView, selectedCategory, currentFolderId]);
+
   // Upload Handler
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
@@ -142,7 +152,7 @@ function MainApp() {
     setUploadProgress(10);
 
     try {
-      await api.uploadFilesWithProgress(
+      const uploadRes = await api.uploadFilesWithProgress(
         fileList,
         currentFolderId,
         (progress) => {
@@ -152,8 +162,17 @@ function MainApp() {
 
       setUploadProgress(100);
       setUploadQueue((prev) => prev.map((item) => ({ ...item, status: 'done' })));
-      await loadFiles();
-      await loadData();
+
+      // Real-time instantaneous optimistic UI insertion (0ms delay)
+      if (uploadRes && uploadRes.files && Array.isArray(uploadRes.files) && uploadRes.files.length > 0) {
+        setFiles((prev) => {
+          const existingIds = new Set(prev.map((f) => f.id));
+          const newItems = uploadRes.files.filter((f) => !existingIds.has(f.id));
+          return [...newItems, ...prev];
+        });
+      }
+
+      await Promise.all([loadFiles(), loadData()]);
     } catch (err) {
       console.error('Upload failed:', err);
       setUploadQueue((prev) => prev.map((item) => ({ ...item, status: 'error' })));
