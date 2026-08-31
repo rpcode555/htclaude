@@ -12,11 +12,14 @@ const { requireAdminAuth } = require('../middleware/authMiddleware');
 const { requireApiKey } = require('../middleware/apiKeyMiddleware');
 const { authLimiter, uploadLimiter } = require('../middleware/rateLimitMiddleware');
 
+const { TEMP_UPLOAD_DIR } = require('../config/paths');
+
 // Multer storage setup for temporary upload handling
-const TEMP_UPLOAD_DIR = path.join(__dirname, '../temp_uploads');
-if (!fs.existsSync(TEMP_UPLOAD_DIR)) {
-  fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-}
+try {
+  if (!fs.existsSync(TEMP_UPLOAD_DIR)) {
+    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
+  }
+} catch (e) {}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {

@@ -2,13 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const { DATA_DIR } = require('./config/paths');
 const DB_FILE = path.join(DATA_DIR, 'telecloud_db.json');
+const BUNDLED_DB_FILE = path.join(__dirname, 'data/telecloud_db.json');
 
 // Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch (e) {}
 
 const defaultData = {
   settings: {
@@ -74,10 +77,16 @@ class Database {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         return { ...defaultData, ...JSON.parse(raw) };
       }
+      if (BUNDLED_DB_FILE !== DB_FILE && fs.existsSync(BUNDLED_DB_FILE)) {
+        const raw = fs.readFileSync(BUNDLED_DB_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        this.saveData({ ...defaultData, ...parsed }, true);
+        return { ...defaultData, ...parsed };
+      }
     } catch (err) {
       console.error('[DB] Error loading JSON DB, resetting to defaults:', err.message);
     }
-    this.saveData(defaultData);
+    this.saveData(defaultData, true);
     return defaultData;
   }
 

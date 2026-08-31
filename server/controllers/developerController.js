@@ -4,13 +4,7 @@ const mime = require('mime-types');
 const { db, detectCategory } = require('../db');
 const telegramService = require('../services/telegramService');
 
-const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
-
-function isSafePath(targetPath) {
-  if (!targetPath) return false;
-  const resolved = path.resolve(targetPath);
-  return resolved.startsWith(UPLOADS_DIR);
-}
+const { UPLOADS_DIR, isSafePath } = require('../config/paths');
 
 function sanitizeFileName(name) {
   if (!name) return 'image_' + Date.now();
