@@ -206,25 +206,27 @@ function MainApp() {
       variant: 'danger',
     });
     if (ok) {
+      setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, is_trash: 1 } : f)));
+      if (currentFolderId === folderId) {
+        setCurrentFolderId(null);
+      }
       try {
         await api.deleteFolder(folderId, false);
-        if (currentFolderId === folderId) {
-          setCurrentFolderId(null);
-        }
-        await loadData();
-        await loadFiles();
+        await Promise.all([loadData(), loadFiles()]);
       } catch (err) {
+        await Promise.all([loadData(), loadFiles()]);
         alert(err.message);
       }
     }
   };
 
   const handleRestoreFolder = async (folderId) => {
+    setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, is_trash: 0 } : f)));
     try {
       await api.restoreFolder(folderId);
-      await loadData();
-      await loadFiles();
+      await Promise.all([loadData(), loadFiles()]);
     } catch (err) {
+      await Promise.all([loadData(), loadFiles()]);
       alert(err.message);
     }
   };
@@ -237,11 +239,15 @@ function MainApp() {
       variant: 'danger',
     });
     if (ok) {
+      setFolders((prev) => prev.filter((f) => f.id !== folderId));
+      if (currentFolderId === folderId) {
+        setCurrentFolderId(null);
+      }
       try {
         await api.deleteFolder(folderId, true);
-        await loadData();
-        await loadFiles();
+        await Promise.all([loadData(), loadFiles()]);
       } catch (err) {
+        await Promise.all([loadData(), loadFiles()]);
         alert(err.message);
       }
     }
@@ -263,33 +269,38 @@ function MainApp() {
   };
 
   const handleToggleStar = async (fileId, isStarred) => {
+    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, is_starred: isStarred ? 1 : 0 } : f)));
     try {
       await api.updateFile(fileId, { is_starred: isStarred });
-      await loadFiles();
       await loadData();
     } catch (err) {
+      await loadFiles();
       console.error(err);
     }
   };
 
   const handleTrashFiles = async (fileIds) => {
+    setFiles((prev) => prev.filter((f) => !fileIds.includes(f.id)));
+    setSelectedFiles([]);
     try {
       await api.batchAction('trash', fileIds);
-      setSelectedFiles([]);
-      await loadFiles();
-      await loadData();
+      await Promise.all([loadFiles(), loadData()]);
     } catch (err) {
+      await loadFiles();
       alert(err.message);
     }
   };
 
   const handleRestoreFiles = async (fileIds) => {
+    if (currentView === 'trash') {
+      setFiles((prev) => prev.filter((f) => !fileIds.includes(f.id)));
+    }
+    setSelectedFiles([]);
     try {
       await api.batchAction('restore', fileIds);
-      setSelectedFiles([]);
-      await loadFiles();
-      await loadData();
+      await Promise.all([loadFiles(), loadData()]);
     } catch (err) {
+      await loadFiles();
       alert(err.message);
     }
   };
@@ -302,12 +313,13 @@ function MainApp() {
       variant: 'danger',
     });
     if (ok) {
+      setFiles((prev) => prev.filter((f) => !fileIds.includes(f.id)));
+      setSelectedFiles([]);
       try {
         await api.batchAction('delete', fileIds);
-        setSelectedFiles([]);
-        await loadFiles();
-        await loadData();
+        await Promise.all([loadFiles(), loadData()]);
       } catch (err) {
+        await loadFiles();
         alert(err.message);
       }
     }
@@ -321,31 +333,37 @@ function MainApp() {
       variant: 'danger',
     });
     if (ok) {
+      if (currentView === 'trash') {
+        setFiles([]);
+      }
+      setSelectedFiles([]);
       try {
         await api.emptyTrash();
-        await loadFiles();
-        await loadData();
+        await Promise.all([loadFiles(), loadData()]);
       } catch (err) {
+        await loadFiles();
         alert(err.message);
       }
     }
   };
 
   const handleRenameFile = async (fileId, newName) => {
+    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, name: newName } : f)));
     try {
       await api.updateFile(fileId, { name: newName });
-      await loadFiles();
+      await Promise.all([loadFiles(), loadData()]);
     } catch (err) {
+      await loadFiles();
       alert(err.message);
     }
   };
 
   const handleMoveFiles = async (targetFolderId) => {
+    const movedIds = [...selectedFiles];
+    setSelectedFiles([]);
     try {
-      await api.batchAction('move', selectedFiles, targetFolderId);
-      setSelectedFiles([]);
-      await loadFiles();
-      await loadData();
+      await api.batchAction('move', movedIds, targetFolderId);
+      await Promise.all([loadFiles(), loadData()]);
     } catch (err) {
       alert(err.message);
     }

@@ -39,6 +39,14 @@ const upload = multer({
   },
 });
 
+// Disable HTTP response caching on dynamic API queries
+router.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 // --- Public Firebase Config (Served dynamically from backend environment) ---
 router.get('/config/firebase', (req, res) => {
   res.json({

@@ -578,23 +578,35 @@ export default function FileExplorer({
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     {currentView === 'trash' ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRestoreFile([file.id]);
-                        }}
-                        className="p-1.5 text-emerald-400 hover:bg-slate-800 rounded-lg"
-                        title="Restore"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                      </button>
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRestoreFile([file.id]);
+                          }}
+                          className="p-1.5 text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                          title="Restore to Drive"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeletePermanent([file.id]);
+                          }}
+                          className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Permanently"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     ) : (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           onTrashFile([file.id]);
                         }}
-                        className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg"
+                        className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                         title="Move to Recycle Bin"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -707,23 +719,35 @@ export default function FileExplorer({
                               <Edit2 className="w-4 h-4" />
                             </button>
                             {currentView === 'trash' ? (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onRestoreFile([file.id]);
-                                }}
-                                className="p-1.5 text-emerald-400 hover:bg-slate-800 rounded-lg"
-                                title="Restore"
-                              >
-                                <RotateCcw className="w-4 h-4" />
-                              </button>
+                              <>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRestoreFile([file.id]);
+                                  }}
+                                  className="p-1.5 text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                                  title="Restore to Drive"
+                                >
+                                  <RotateCcw className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeletePermanent([file.id]);
+                                  }}
+                                  className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete Permanently"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </>
                             ) : (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onTrashFile([file.id]);
                                 }}
-                                className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg"
+                                className="p-1.5 text-red-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                                 title="Move to Recycle Bin"
                               >
                                 <Trash2 className="w-4 h-4" />

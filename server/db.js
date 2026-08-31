@@ -90,7 +90,7 @@ class Database {
     return defaultData;
   }
 
-  saveData(data = this.data, immediate = false) {
+  saveData(data = this.data, immediate = true) {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -100,17 +100,8 @@ class Database {
       try {
         const jsonContent = JSON.stringify(data, null, 2);
         const tempPath = `${DB_FILE}.tmp`;
-        fs.writeFile(tempPath, jsonContent, 'utf-8', (err) => {
-          if (err) {
-            console.error('[DB] Error saving JSON DB:', err.message);
-            return;
-          }
-          fs.rename(tempPath, DB_FILE, (renameErr) => {
-            if (renameErr) {
-              console.error('[DB] Error atomic rename DB:', renameErr.message);
-            }
-          });
-        });
+        fs.writeFileSync(tempPath, jsonContent, 'utf-8');
+        fs.renameSync(tempPath, DB_FILE);
       } catch (err) {
         console.error('[DB] Error saving JSON DB:', err.message);
       }
@@ -119,7 +110,7 @@ class Database {
     if (immediate) {
       performSave();
     } else {
-      this.saveTimer = setTimeout(performSave, 80);
+      this.saveTimer = setTimeout(performSave, 20);
     }
   }
 
@@ -130,7 +121,7 @@ class Database {
 
   async setSetting(key, value) {
     this.data.settings[key] = value;
-    this.saveData();
+    this.saveData(this.data, true);
     return value;
   }
 
@@ -140,6 +131,7 @@ class Database {
 
   // --- Folders ---
   async getFolders(includeTrash = true) {
+    this.data = this.loadData();
     const list = includeTrash
       ? (this.data.folders || [])
       : (this.data.folders || []).filter((f) => !f.is_trash);
@@ -236,6 +228,7 @@ class Database {
 
   // --- Files ---
   async getFiles({ folder_id, category, filter = 'all', search = '', sortBy = 'created_at', sortOrder = 'desc' } = {}) {
+    this.data = this.loadData();
     let result = [...this.data.files];
 
     // Trash filter
@@ -506,6 +499,7 @@ class Database {
 
   // --- Stats ---
   async getStats() {
+    this.data = this.loadData();
     const activeFiles = this.data.files.filter((f) => !f.is_trash);
     const trashFiles = this.data.files.filter((f) => f.is_trash === 1);
     const starredFiles = this.data.files.filter((f) => !f.is_trash && f.is_starred === 1);
