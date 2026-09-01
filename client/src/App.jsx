@@ -416,11 +416,11 @@ function MainApp() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen w-screen bg-[#060911] flex flex-col items-center justify-center space-y-4 select-none">
-        <div className="w-14 h-14 rounded-3xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center shadow-2xl shadow-cyan-500/20">
-          <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen w-screen bg-gray-50 flex flex-col items-center justify-center space-y-4 select-none">
+        <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center shadow-lg shadow-indigo-100">
+          <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
         </div>
-        <p className="text-xs text-slate-400 font-mono tracking-widest uppercase animate-pulse">
+        <p className="text-xs text-gray-400 font-mono tracking-widest uppercase animate-pulse">
           Authenticating &bull; HT Claude
         </p>
       </div>
@@ -436,7 +436,7 @@ function MainApp() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="flex h-screen w-screen overflow-hidden bg-[var(--bg-app)] text-[var(--text-primary)] antialiased font-sans select-none relative"
+      className="flex h-screen w-screen overflow-hidden bg-[#f4f6fb] text-gray-900 antialiased font-sans select-none relative"
     >
       {/* Hidden Multi-File Upload Input */}
       <input
@@ -641,19 +641,19 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen w-screen bg-[#060911] text-slate-100 flex flex-col items-center justify-center p-6 text-center select-none">
-          <div className="w-16 h-16 rounded-3xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 shadow-xl shadow-red-500/10">
+        <div className="min-h-screen w-screen bg-gray-50 text-gray-900 flex flex-col items-center justify-center p-6 text-center select-none">
+          <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-500 mb-4 shadow-lg shadow-red-100">
             <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <h2 className="text-xl font-bold text-white mb-1">Interface Render Warning</h2>
-          <div className="w-full max-w-xl text-left bg-slate-900/90 border border-red-500/30 rounded-2xl p-4 my-3 font-mono text-xs text-red-300 overflow-x-auto space-y-2 shadow-2xl">
-            <p className="font-bold text-red-400 text-sm">
+          <h2 className="text-xl font-bold text-gray-900 mb-1">Something went wrong</h2>
+          <div className="w-full max-w-xl text-left bg-white border border-red-200 rounded-xl p-4 my-3 font-mono text-xs text-red-600 overflow-x-auto space-y-2 shadow-md">
+            <p className="font-bold text-red-600 text-sm">
               {this.state.error?.name || 'Error'}: {this.state.error?.message || String(this.state.error)}
             </p>
             {this.state.error?.stack && (
-              <pre className="text-[11px] text-slate-400 opacity-80 whitespace-pre-wrap font-mono max-h-36 overflow-y-auto">
+              <pre className="text-[11px] text-gray-500 whitespace-pre-wrap font-mono max-h-36 overflow-y-auto">
                 {this.state.error.stack.split('\n').slice(0, 6).join('\n')}
               </pre>
             )}
@@ -661,13 +661,13 @@ class ErrorBoundary extends React.Component {
           <div className="flex items-center gap-3 mt-1">
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all cursor-pointer"
+              className="px-4 py-2.5 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-all cursor-pointer shadow-sm"
             >
               Try Again
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-xs shadow-lg shadow-cyan-500/25 hover:from-cyan-400 hover:to-blue-500 transition-all cursor-pointer"
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-200 transition-all cursor-pointer"
             >
               Reload Application
             </button>

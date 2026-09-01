@@ -14,6 +14,8 @@ import {
   Folder,
   Code2,
   X,
+  Cloud,
+  LayoutDashboard,
 } from 'lucide-react';
 import { formatBytes } from '../utils';
 import { useAuth } from '../context/AuthContext';
@@ -40,21 +42,20 @@ export default function Sidebar({
   const { currentUser } = useAuth();
 
   const mainNavItems = [
-    { id: 'all', label: 'All Files', icon: HardDrive, count: stats?.totalFiles || 0 },
-    { id: 'recent', label: 'Recent', icon: Clock },
-    { id: 'starred', label: 'Starred', icon: Star, count: stats?.starredCount || 0 },
-    { id: 'trash', label: 'Recycle Bin', icon: Trash2, count: stats?.trashCount || 0 },
+    { id: 'all',     label: 'All Files',    icon: HardDrive,      count: stats?.totalFiles || 0 },
+    { id: 'recent',  label: 'Recent',       icon: Clock },
+    { id: 'starred', label: 'Starred',      icon: Star,           count: stats?.starredCount || 0 },
+    { id: 'trash',   label: 'Recycle Bin',  icon: Trash2,         count: stats?.trashCount || 0 },
   ];
 
   const categoryItems = [
-    { id: 'images', label: 'Images', icon: ImageIcon, color: 'text-pink-400', count: stats?.categories?.images?.count || 0 },
-    { id: 'videos', label: 'Videos', icon: Film, color: 'text-purple-400', count: stats?.categories?.videos?.count || 0 },
-    { id: 'audio', label: 'Music & Audio', icon: Music, color: 'text-emerald-400', count: stats?.categories?.audio?.count || 0 },
-    { id: 'documents', label: 'Documents', icon: FileText, color: 'text-blue-400', count: stats?.categories?.documents?.count || 0 },
-    { id: 'archives', label: 'Archives', icon: Archive, color: 'text-amber-400', count: stats?.categories?.archives?.count || 0 },
+    { id: 'images',    label: 'Images',      icon: ImageIcon, dotColor: 'bg-pink-500',    count: stats?.categories?.images?.count    || 0 },
+    { id: 'videos',    label: 'Videos',      icon: Film,      dotColor: 'bg-violet-500',  count: stats?.categories?.videos?.count    || 0 },
+    { id: 'audio',     label: 'Music',       icon: Music,     dotColor: 'bg-emerald-500', count: stats?.categories?.audio?.count     || 0 },
+    { id: 'documents', label: 'Documents',   icon: FileText,  dotColor: 'bg-blue-500',    count: stats?.categories?.documents?.count || 0 },
+    { id: 'archives',  label: 'Archives',    icon: Archive,   dotColor: 'bg-amber-500',   count: stats?.categories?.archives?.count  || 0 },
   ];
 
-  // Handle Logo Click -> Go to Home / All Files (SPA state navigation without page reload)
   const handleLogoClick = () => {
     setCurrentView('all');
     setSelectedCategory(null);
@@ -80,179 +81,158 @@ export default function Sidebar({
     setSelectedCategory(null);
   };
 
+  // Storage bar segments
+  const totalSize = stats?.totalSize || 0;
+  const pct = (size) => totalSize ? Math.min(100, Math.max(size > 0 ? 3 : 0, (size / totalSize) * 100)) : 0;
+
   return (
     <>
-      {/* Mobile Backdrop Overlay */}
+      {/* Mobile Backdrop */}
       {isMobileOpen && (
         <div
           onClick={onCloseMobile}
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 lg:hidden animate-fade-in"
+          className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-40 lg:hidden animate-fade-in"
         />
       )}
 
-      {/* Sidebar Container */}
+      {/* Sidebar */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 border-r border-[var(--border-subtle)] bg-[var(--bg-sidebar)] flex flex-col justify-between shrink-0 h-screen select-none transition-transform duration-300 ease-in-out ${
-          isMobileOpen ? 'translate-x-0 shadow-2xl shadow-cyan-500/10' : '-translate-x-full lg:translate-x-0'
+        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 flex flex-col bg-white border-r border-gray-200 h-screen select-none transition-transform duration-300 ease-in-out shrink-0 ${
+          isMobileOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full lg:translate-x-0'
         }`}
       >
-        {/* Fixed Top Brand Header & Action (Never scrolls) */}
-        <div className="p-4 border-b border-[var(--border-subtle)] bg-[var(--bg-sidebar)] shrink-0 space-y-3">
-          {/* Brand Logo Header */}
-          <div className="flex items-center justify-between">
-            <div
+        {/* ── Brand Header ── */}
+        <div className="px-4 py-4 border-b border-gray-100 shrink-0">
+          <div className="flex items-center justify-between mb-4">
+            <button
               onClick={handleLogoClick}
-              className="flex items-center gap-3 px-2 py-1.5 rounded-2xl hover:bg-slate-800/50 cursor-pointer transition-all group flex-1"
+              className="flex items-center gap-3 group cursor-pointer"
               title="Go to All Files"
             >
-              <div className="w-10 h-10 rounded-2xl bg-white/5 border border-white/10 p-0.5 flex items-center justify-center shadow-lg shadow-cyan-500/20 shrink-0 group-hover:scale-105 transition-transform">
-                <img
-                  src="/logo.png"
-                  alt="HT Claude Logo"
-                  className="w-full h-full rounded-xl object-cover"
-                />
+              {/* Logo Icon */}
+              <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-md shadow-indigo-600/30 group-hover:shadow-indigo-600/45 transition-shadow shrink-0">
+                <Cloud className="w-5 h-5 text-white" />
               </div>
-              <div className="min-w-0">
+              <div>
                 <div className="flex items-center gap-1.5">
-                  <h1 className="font-black text-base text-white tracking-wide truncate group-hover:text-cyan-300 transition-colors" style={{ fontFamily: 'Poppins, sans-serif' }}>
-                    HT CLAUDE
-                  </h1>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 shrink-0">
+                  <span className="font-bold text-[15px] text-gray-900 tracking-tight group-hover:text-indigo-600 transition-colors">
+                    HT Claude
+                  </span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 leading-none">
                     PRO
                   </span>
                 </div>
-                <p className="text-[10px] text-cyan-400/90 font-semibold tracking-wider uppercase truncate">
-                  Upload &bull; Store &bull; Share
-                </p>
+                <p className="text-[10px] text-gray-400 font-medium mt-0.5">Admin Storage Panel</p>
               </div>
-            </div>
+            </button>
 
-            {/* Mobile Close Button */}
             <button
               onClick={onCloseMobile}
-              className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white lg:hidden cursor-pointer"
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 lg:hidden transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Quick Primary Upload Button */}
+          {/* Upload Button */}
           <button
-            onClick={() => {
-              if (onUploadClick) onUploadClick();
-              if (onCloseMobile) onCloseMobile();
-            }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-sky-500/20 hover:shadow-sky-500/35 transition-all cursor-pointer transform hover:-translate-y-0.5 active:translate-y-0"
+            onClick={() => { onUploadClick?.(); onCloseMobile?.(); }}
+            className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Upload Files</span>
           </button>
         </div>
 
-        {/* Scrollable Navigation & Folders */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-          {/* Main Navigation */}
-          <div className="space-y-1">
-            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2">
-              Storage
-            </div>
-            {mainNavItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = currentView === item.id && !selectedCategory && (item.id !== 'all' || !currentFolderId);
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleMainNavClick(item.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 shadow-sm shadow-cyan-500/10'
-                      : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
-                    <span>{item.label}</span>
-                  </div>
-                  {item.count !== undefined && item.count > 0 && (
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${isActive ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800 text-slate-400'}`}>
-                      {item.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+        {/* ── Scrollable Nav ── */}
+        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-5">
 
-            {/* Developer API Nav Item */}
-            <button
-              onClick={onOpenDeveloperSection}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
-                currentView === 'developer'
-                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-sm shadow-cyan-500/10'
-                  : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Code2 className={`w-4 h-4 ${currentView === 'developer' ? 'text-cyan-400' : 'text-emerald-400'}`} />
-                <span>Developer API</span>
-              </div>
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-                API
-              </span>
-            </button>
+          {/* Storage Section */}
+          <div>
+            <p className="px-3 mb-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Storage</p>
+            <div className="space-y-0.5">
+              {mainNavItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = currentView === item.id && !selectedCategory && (item.id !== 'all' || !currentFolderId);
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleMainNavClick(item.id)}
+                    className={`nav-item ${isActive ? 'active' : ''}`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {item.count !== undefined && item.count > 0 && (
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${
+                        isActive
+                          ? 'bg-indigo-200/70 text-indigo-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {item.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Developer API */}
+              <button
+                onClick={onOpenDeveloperSection}
+                className={`nav-item ${currentView === 'developer' ? 'active' : ''}`}
+              >
+                <Code2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span className="flex-1 text-left">Developer API</span>
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  API
+                </span>
+              </button>
+            </div>
           </div>
 
-          {/* Categories */}
-          <div className="space-y-1">
-            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2">
-              Categories
+          {/* Categories Section */}
+          <div>
+            <p className="px-3 mb-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Categories</p>
+            <div className="space-y-0.5">
+              {categoryItems.map((cat) => {
+                const Icon = cat.icon;
+                const isActive = currentView === 'category' && selectedCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => handleCategoryClick(cat.id)}
+                    className={`nav-item ${isActive ? 'active' : ''}`}
+                  >
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${cat.dotColor}`} />
+                    <Icon className="w-4 h-4 shrink-0 text-gray-400" />
+                    <span className="flex-1 text-left">{cat.label}</span>
+                    {cat.count > 0 && (
+                      <span className="text-[11px] text-gray-400 font-mono">{cat.count}</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            {categoryItems.map((cat) => {
-              const Icon = cat.icon;
-              const isActive = currentView === 'category' && selectedCategory === cat.id;
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => handleCategoryClick(cat.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-slate-800/90 text-white border border-slate-700 shadow-sm'
-                      : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Icon className={`w-4 h-4 ${cat.color}`} />
-                    <span>{cat.label}</span>
-                  </div>
-                  {cat.count > 0 && (
-                    <span className="text-xs text-slate-400 font-mono">
-                      {cat.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
           </div>
 
-          {/* Folders Navigation */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between px-3 mb-2">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                Folders
-              </span>
+          {/* Folders Section */}
+          <div>
+            <div className="flex items-center justify-between px-3 mb-1.5">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Folders</p>
               <button
                 onClick={onNewFolderClick}
-                className="p-1 rounded-md text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition-colors"
-                title="Create new folder"
+                title="New folder"
+                className="p-1 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </div>
-
             <div className="space-y-0.5">
               {(() => {
-                const activeFolders = (folders || []).filter((f) => !f.is_trash);
+                const activeFolders = (folders || []).filter(f => !f.is_trash);
                 if (activeFolders.length === 0) {
-                  return <div className="px-3 py-2 text-xs text-slate-500 italic">No custom folders yet</div>;
+                  return (
+                    <p className="px-3 py-2 text-xs text-gray-400 italic">No folders yet</p>
+                  );
                 }
                 return activeFolders.map((folder) => {
                   const isSelected = currentFolderId === folder.id;
@@ -260,25 +240,18 @@ export default function Sidebar({
                     <button
                       key={folder.id}
                       onClick={() => handleFolderClick(folder.id)}
-                      className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-semibold shadow-sm shadow-cyan-500/10'
-                          : 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100'
-                      }`}
+                      className={`nav-item ${isSelected ? 'active' : ''}`}
                     >
-                      <div className="flex items-center gap-2 truncate min-w-0 flex-1">
-                        <Folder
-                          className="w-4 h-4 shrink-0"
-                          style={{ color: folder.color || '#38bdf8' }}
-                        />
-                        <span className="truncate text-xs">{folder.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0 ml-1.5">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-800/90 text-slate-400 font-mono font-semibold border border-slate-700/60">
-                          {folder.file_count || 0}
-                        </span>
-                        <ChevronRight className={`w-3.5 h-3.5 text-slate-500 transition-transform ${isSelected ? 'rotate-90 text-cyan-400' : ''}`} />
-                      </div>
+                      <Folder
+                        className="w-4 h-4 shrink-0"
+                        style={{ color: isSelected ? '#4f46e5' : (folder.color || '#9ca3af') }}
+                      />
+                      <span className="flex-1 text-left truncate text-xs">{folder.name}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold ${
+                        isSelected ? 'bg-indigo-200/60 text-indigo-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {folder.file_count || 0}
+                      </span>
                     </button>
                   );
                 });
@@ -287,87 +260,49 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Bottom Profile & Storage Card */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40 space-y-3">
-          {/* Storage Bar */}
+        {/* ── Bottom: Storage & User ── */}
+        <div className="px-4 py-4 border-t border-gray-100 bg-gray-50/60 space-y-3 shrink-0">
+          {/* Storage Usage */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400 font-medium">Storage Used</span>
-              <span className="text-cyan-400 font-bold font-mono">
-                {formatBytes(stats?.totalSize || 0)}
-              </span>
+              <span className="text-gray-500 font-medium">Storage Used</span>
+              <span className="text-indigo-600 font-bold font-mono">{formatBytes(totalSize)}</span>
             </div>
-
-            <div className="w-full h-2 rounded-full bg-slate-800/90 overflow-hidden flex">
-              <div
-                style={{
-                  width: `${Math.min(
-                    100,
-                    stats?.totalSize ? Math.max(5, (stats?.categories?.images?.size || 0) / stats.totalSize * 100) : 0
-                  )}%`,
-                }}
-                className="h-full bg-pink-500"
-                title="Images"
-              />
-              <div
-                style={{
-                  width: `${Math.min(
-                    100,
-                    stats?.totalSize ? Math.max(0, (stats?.categories?.videos?.size || 0) / stats.totalSize * 100) : 0
-                  )}%`,
-                }}
-                className="h-full bg-purple-500"
-                title="Videos"
-              />
-              <div
-                style={{
-                  width: `${Math.min(
-                    100,
-                    stats?.totalSize ? Math.max(0, (stats?.categories?.audio?.size || 0) / stats.totalSize * 100) : 0
-                  )}%`,
-                }}
-                className="h-full bg-emerald-500"
-                title="Audio"
-              />
-              <div
-                style={{
-                  width: `${Math.min(
-                    100,
-                    stats?.totalSize ? Math.max(0, (stats?.categories?.documents?.size || 0) / stats.totalSize * 100) : 0
-                  )}%`,
-                }}
-                className="h-full bg-blue-500"
-                title="Documents"
-              />
+            <div className="storage-bar">
+              <div style={{ width: `${pct(stats?.categories?.images?.size || 0)}%` }}    className="h-full bg-pink-400" title="Images" />
+              <div style={{ width: `${pct(stats?.categories?.videos?.size || 0)}%` }}    className="h-full bg-violet-500" title="Videos" />
+              <div style={{ width: `${pct(stats?.categories?.audio?.size || 0)}%` }}     className="h-full bg-emerald-500" title="Audio" />
+              <div style={{ width: `${pct(stats?.categories?.documents?.size || 0)}%` }} className="h-full bg-blue-500" title="Documents" />
+              <div style={{ width: `${pct(stats?.categories?.archives?.size || 0)}%` }}  className="h-full bg-amber-400" title="Archives" />
             </div>
-            <div className="flex items-center justify-between text-[11px] text-slate-500">
-              <span>{stats?.totalFiles || 0} items</span>
-              <span className="text-cyan-400/80 font-medium">Cloud Storage</span>
+            <div className="flex justify-between text-[10px] text-gray-400">
+              <span>{stats?.totalFiles || 0} files</span>
+              <span>Unlimited • Telegram Cloud</span>
             </div>
           </div>
 
-          {/* User Card - Click opens Admin Control Panel */}
+          {/* User Card → opens Admin Panel */}
           {currentUser && (
-            <div
+            <button
               onClick={onOpenAdminPanel}
-              className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-cyan-500/40 flex items-center justify-between cursor-pointer group transition-all"
-              title="Open Admin Control Panel & Profile"
+              className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-all cursor-pointer group text-left"
+              title="Open Admin Panel"
             >
-              <div className="flex items-center gap-2.5 truncate">
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-700 flex items-center justify-center text-white shrink-0 text-xs font-bold">
-                  {(currentUser.displayName || currentUser.email || 'A')[0].toUpperCase()}
-                </div>
-                <div className="truncate">
-                  <p className="text-xs font-semibold text-slate-200 group-hover:text-white truncate">
-                    {currentUser.displayName || currentUser.email?.split('@')[0]}
-                  </p>
-                  <p className="text-[10px] text-emerald-400 font-medium truncate">
-                    Admin Profile & Settings
-                  </p>
-                </div>
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm">
+                {currentUser.photoURL ? (
+                  <img src={currentUser.photoURL} alt="Avatar" className="w-full h-full rounded-lg object-cover" />
+                ) : (
+                  (currentUser.displayName || currentUser.email || 'A')[0].toUpperCase()
+                )}
               </div>
-              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all" />
-            </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-gray-800 group-hover:text-indigo-700 transition-colors truncate">
+                  {currentUser.displayName || currentUser.email?.split('@')[0]}
+                </p>
+                <p className="text-[10px] text-emerald-600 font-medium">● Admin • Online</p>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition-all shrink-0" />
+            </button>
           )}
         </div>
       </aside>

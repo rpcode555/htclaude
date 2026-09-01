@@ -1,29 +1,19 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect } from 'react';
 
 const ThemeContext = createContext();
 
+// Light mode is the ONLY theme — no toggle, no dark mode.
+// ThemeContext is kept for API compatibility but is a no-op.
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('htc_theme') || 'dark';
-  });
-
   useEffect(() => {
-    localStorage.setItem('htc_theme', theme);
-    if (theme === 'light') {
-      document.documentElement.classList.add('light-theme');
-      document.body.classList.add('light-theme');
-    } else {
-      document.documentElement.classList.remove('light-theme');
-      document.body.classList.remove('light-theme');
-    }
-  }, [theme]);
-
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
-  };
+    // Always ensure light mode — remove any legacy dark class
+    document.documentElement.classList.remove('dark', 'light-theme');
+    document.body.classList.remove('dark', 'light-theme');
+    localStorage.removeItem('htc_theme');
+  }, []);
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme, isDark: theme === 'dark' }}>
+    <ThemeContext.Provider value={{ theme: 'light', isDark: false, toggleTheme: () => {} }}>
       {children}
     </ThemeContext.Provider>
   );
