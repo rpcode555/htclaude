@@ -11,7 +11,7 @@ export default function UploadModal({
   if (!uploadQueue || uploadQueue.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-40 w-80 sm:w-96 glass-modal rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-2xl animate-fade-in bg-white dark:bg-gray-900 select-none">
+    <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:bottom-6 w-auto sm:w-96 max-w-[calc(100vw-2rem)] z-40 glass-modal rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-2xl animate-fade-in bg-white dark:bg-gray-900 select-none">
       {/* Header */}
       <div className="px-4 py-3 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
