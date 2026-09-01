@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from './api';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import FileExplorer from './components/FileExplorer';
@@ -28,6 +29,23 @@ function MainApp() {
   const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState('desc');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('htc_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleSidebarCollapse = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('htc_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   // Data States
   const [files, setFiles] = useState([]);
@@ -436,7 +454,7 @@ function MainApp() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="flex h-screen w-screen overflow-hidden bg-[#f4f6fb] text-gray-900 antialiased font-sans select-none relative"
+      className="flex h-screen w-screen overflow-hidden dashboard-grid-bg text-gray-900 dark:text-slate-100 antialiased font-sans select-none relative"
     >
       {/* Hidden Multi-File Upload Input */}
       <input
@@ -487,10 +505,12 @@ function MainApp() {
         onRefreshData={loadData}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={handleToggleSidebarCollapse}
       />
 
       {/* Main Layout Area */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden dashboard-grid-bg">
         {/* Top Navbar */}
         <Navbar
           searchTerm={searchTerm}
@@ -508,6 +528,8 @@ function MainApp() {
           isAdminActive={currentView === 'admin'}
           authStatus={authStatus}
           onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
+          isSidebarCollapsed={isSidebarCollapsed}
+          onToggleSidebarCollapse={handleToggleSidebarCollapse}
         />
 
         {/* View Switcher: Developer Section vs Admin Panel vs File Explorer */}
@@ -682,9 +704,11 @@ class ErrorBoundary extends React.Component {
 export default function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <MainApp />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <MainApp />
+        </AuthProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

@@ -136,9 +136,9 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md animate-fade-in select-none">
       <div className="relative mb-5">
         {/* Ambient Glow Aura */}
-        <div className="absolute -inset-4 rounded-full bg-gradient-to-r from-sky-500/20 via-cyan-500/25 to-purple-500/20 blur-xl animate-pulse" />
-        <div className="relative w-16 h-16 rounded-2xl bg-slate-900/90 border border-sky-500/30 flex items-center justify-center shadow-2xl shadow-sky-500/20">
-          <div className="w-8 h-8 rounded-full border-2 border-sky-400/30 border-t-sky-400 animate-spin" />
+        <div className="absolute -inset-4 rounded-full bg-gradient-to-r from-rose-500/20 via-red-500/25 to-pink-500/20 blur-xl animate-pulse" />
+        <div className="relative w-16 h-16 rounded-2xl bg-slate-900/90 border border-rose-500/30 flex items-center justify-center shadow-2xl shadow-rose-500/20">
+          <div className="w-8 h-8 rounded-full border-2 border-rose-400/30 border-t-rose-500 animate-spin" />
         </div>
       </div>
       <div className="text-center space-y-1.5 max-w-sm">
@@ -146,12 +146,12 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
         <p className="text-xs text-slate-400 font-mono flex items-center justify-center gap-1.5">
           <span className="truncate max-w-xs">{file.name}</span>
           <span>&bull;</span>
-          <span className="text-sky-400 font-semibold">{formatBytes(file.size)}</span>
+          <span className="text-rose-400 font-semibold">{formatBytes(file.size)}</span>
         </p>
       </div>
       {/* Mini Shimmer Bar */}
       <div className="w-44 h-1 bg-slate-800 rounded-full overflow-hidden mt-4">
-        <div className="w-full h-full bg-gradient-to-r from-sky-500 via-cyan-400 to-purple-500 animate-pulse" />
+        <div className="w-full h-full bg-gradient-to-r from-rose-500 via-red-400 to-pink-500 animate-pulse" />
       </div>
     </div>
   );
@@ -451,7 +451,7 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
           {/* Direct Download Button */}
           <button
             onClick={() => onDownload(file)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white text-xs font-bold shadow-md shadow-sky-500/20 transition-all cursor-pointer transform hover:-translate-y-0.5"
+            className="btn-primary flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer"
             title="Download file"
           >
             <Download className="w-4 h-4" />
@@ -489,7 +489,7 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
         {showDetails && (
           <div className="w-80 sm:w-96 border-l border-slate-800/80 bg-slate-900/95 backdrop-blur-2xl p-6 overflow-y-auto space-y-5 text-xs text-slate-300 shrink-0 animate-fade-in shadow-2xl z-30">
             <h4 className="font-bold text-slate-100 text-sm flex items-center gap-2">
-              <Info className="w-4 h-4 text-sky-400" />
+              <Info className="w-4 h-4 text-rose-400" />
               <span>File Details & Metadata</span>
             </h4>
 
@@ -521,17 +521,17 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
 
               <div className="pt-3.5 space-y-1">
                 <span className="text-slate-500 text-[11px] uppercase font-semibold">Storage Location</span>
-                <div className="flex items-center gap-1.5 text-sky-400 font-medium mt-1">
+                <div className="flex items-center gap-1.5 text-rose-400 font-medium mt-1">
                   <Send className="w-3.5 h-3.5" />
                   <span>
                     {file.storage_type === 'telegram'
-                      ? 'Telegram Cloud Storage'
+                      ? 'Encrypted Cloud Storage'
                       : 'Local Cache'}
                   </span>
                 </div>
                 {file.telegram_msg_id && (
                   <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                    Telegram Message ID: #{file.telegram_msg_id}
+                    Storage Object ID: #{file.telegram_msg_id}
                   </p>
                 )}
               </div>

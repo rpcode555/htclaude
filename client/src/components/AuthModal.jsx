@@ -90,28 +90,28 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xl p-4 animate-fade-in">
-      <div className="glass-modal w-full max-w-md rounded-3xl overflow-hidden border border-slate-700/80 shadow-2xl p-6 space-y-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-fade-in select-none">
+      <div className="glass-modal w-full max-w-md rounded-3xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-2xl p-6 space-y-5 bg-white dark:bg-gray-900">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/25">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 to-red-500 flex items-center justify-center text-white shadow-lg shadow-rose-500/25">
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">
+              <h3 className="text-base font-bold text-gray-900 dark:text-white">
                 {isForgotPassword
                   ? 'Reset Password'
                   : isSignUp
                   ? 'Create Admin Account'
                   : 'Admin Authentication'}
               </h3>
-              <p className="text-xs text-slate-400">Hightech Claude Secure Cloud</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Hightech Claude Secure Cloud</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            className="p-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -119,15 +119,15 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
 
         {/* Error / Success Feedback */}
         {error && (
-          <div className="p-3.5 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-start gap-2.5 animate-fade-in">
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+          <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2.5 animate-fade-in">
+            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
         )}
 
         {message && (
-          <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-start gap-2.5 animate-fade-in">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+          <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs flex items-start gap-2.5 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
             <span>{message}</span>
           </div>
         )}
@@ -138,7 +138,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
             <button
               onClick={handleGoogleSignIn}
               disabled={loading}
-              className="w-full py-2.5 px-4 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-slate-200 text-xs font-semibold flex items-center justify-center gap-3 transition-all cursor-pointer shadow-sm hover:border-slate-600"
+              className="w-full py-2.5 px-4 rounded-xl bg-gray-50 dark:bg-gray-950 hover:bg-gray-100 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200 text-xs font-semibold flex items-center justify-center gap-3 transition-all cursor-pointer shadow-xs hover:border-rose-300"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path
@@ -162,11 +162,11 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
             </button>
 
             <div className="flex items-center gap-3">
-              <div className="flex-1 h-px bg-slate-800" />
-              <span className="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">
+              <div className="flex-1 h-px bg-gray-200 dark:bg-gray-800" />
+              <span className="text-[11px] text-gray-400 uppercase tracking-wider font-semibold">
                 Or with email
               </span>
-              <div className="flex-1 h-px bg-slate-800" />
+              <div className="flex-1 h-px bg-gray-200 dark:bg-gray-800" />
             </div>
           </>
         )}
@@ -175,32 +175,32 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
         <form onSubmit={handleSubmit} className="space-y-3.5">
           {isSignUp && !isForgotPassword && (
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-300">Display Name</label>
+              <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Display Name</label>
               <div className="relative flex items-center">
-                <User className="w-4 h-4 text-slate-500 absolute left-3 pointer-events-none" />
+                <User className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
                 <input
                   type="text"
                   required
                   placeholder="e.g. Admin User"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700/80 text-sm text-slate-100 focus:border-cyan-500 outline-none"
+                  className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
                 />
               </div>
             </div>
           )}
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-300">Email Address</label>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Email Address</label>
             <div className="relative flex items-center">
-              <Mail className="w-4 h-4 text-slate-500 absolute left-3 pointer-events-none" />
+              <Mail className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
               <input
                 type="email"
                 required
                 placeholder="admin@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700/80 text-sm text-slate-100 focus:border-cyan-500 outline-none"
+                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
               />
             </div>
           </div>
@@ -208,31 +208,31 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           {!isForgotPassword && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-slate-300">Password</label>
+                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Password</label>
                 <button
                   type="button"
                   onClick={() => setIsForgotPassword(true)}
-                  className="text-[11px] text-cyan-400 hover:underline cursor-pointer"
+                  className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
                 >
                   Forgot password?
                 </button>
               </div>
               <div className="relative flex items-center">
-                <Lock className="w-4 h-4 text-slate-500 absolute left-3 pointer-events-none" />
+                <Lock className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-9 py-2 rounded-xl bg-slate-900 border border-slate-700/80 text-sm text-slate-100 focus:border-cyan-500 outline-none"
+                  className="w-full pl-9 pr-9 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 text-slate-500 hover:text-slate-300"
+                  className="absolute right-3 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4 text-rose-500" />}
                 </button>
               </div>
             </div>
@@ -241,7 +241,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/25 transition-all cursor-pointer flex items-center justify-center gap-2"
+            className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
           >
             {loading ? (
               <>
@@ -259,7 +259,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
         </form>
 
         {/* Footer Toggle */}
-        <div className="text-center pt-1 text-xs text-slate-400 border-t border-slate-800/80">
+        <div className="text-center pt-1 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-800">
           {isForgotPassword ? (
             <button
               onClick={() => {
@@ -267,7 +267,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
                 setError('');
                 setMessage('');
               }}
-              className="text-cyan-400 hover:underline font-semibold cursor-pointer"
+              className="text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer"
             >
               Back to Sign In
             </button>
@@ -279,7 +279,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
                   setIsSignUp(false);
                   setError('');
                 }}
-                className="text-cyan-400 hover:underline font-semibold cursor-pointer"
+                className="text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer"
               >
                 Sign In
               </button>
@@ -292,7 +292,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }) {
                   setIsSignUp(true);
                   setError('');
                 }}
-                className="text-cyan-400 hover:underline font-semibold cursor-pointer"
+                className="text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer"
               >
                 Create Account
               </button>

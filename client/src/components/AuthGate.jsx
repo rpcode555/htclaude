@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   AlertCircle,
   Loader2,
+  Cloud,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,15 +31,15 @@ export default function AuthGate() {
   };
 
   return (
-    <div className="min-h-screen w-screen bg-[var(--bg-app)] text-slate-100 flex flex-col items-center justify-center p-4 relative overflow-hidden select-none">
+    <div className="min-h-screen w-screen bg-[#f4f6fb] dark:bg-[#090d16] text-gray-900 dark:text-slate-100 flex flex-col items-center justify-center p-4 relative overflow-hidden select-none transition-colors">
       {/* Ambient background glow */}
-      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-gradient-to-tr from-cyan-600/15 via-blue-600/10 to-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-gradient-to-tr from-rose-600/15 via-red-600/10 to-pink-600/10 rounded-full blur-3xl pointer-events-none" />
 
       {/* Main Container */}
       <div className="w-full max-w-sm relative z-10 space-y-6">
-        {/* Brand Header with New Official Logo */}
+        {/* Brand Header */}
         <div className="text-center space-y-3">
-          <div className="inline-flex items-center justify-center p-1.5 rounded-3xl bg-white/5 border border-white/10 shadow-2xl shadow-cyan-500/20 backdrop-blur-xl animate-float">
+          <div className="inline-flex items-center justify-center p-1.5 rounded-3xl bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 shadow-2xl shadow-rose-500/20 backdrop-blur-xl animate-float">
             <img
               src="/logo.png"
               alt="HT Claude Logo"
@@ -47,25 +48,25 @@ export default function AuthGate() {
           </div>
           <div>
             <div className="flex items-center justify-center gap-2">
-              <h1 className="text-2xl font-black text-white tracking-wider" style={{ fontFamily: 'Poppins, sans-serif' }}>
+              <h1 className="text-2xl font-black text-gray-900 dark:text-white tracking-wider">
                 HT CLAUDE
               </h1>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60">
                 PRO
               </span>
             </div>
-            <p className="text-[11px] font-bold tracking-widest text-cyan-400 uppercase mt-0.5">
+            <p className="text-[11px] font-bold tracking-widest text-rose-600 dark:text-rose-400 uppercase mt-0.5">
               Upload &bull; Store &bull; Share
             </p>
           </div>
         </div>
 
         {/* Auth Glass Card */}
-        <div className="glass-modal rounded-3xl p-6 border border-slate-700/80 shadow-2xl space-y-4 bg-[var(--bg-card)] backdrop-blur-2xl">
+        <div className="glass-modal rounded-3xl p-6 border border-gray-200 dark:border-gray-800 shadow-2xl space-y-4 bg-white dark:bg-gray-900 backdrop-blur-2xl">
           {/* Security Alert if unauthorized */}
           {displayError && (
-            <div className="p-3.5 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-300 text-xs flex items-start gap-2.5 animate-fade-in">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2.5 animate-fade-in">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
               <span>{displayError}</span>
             </div>
           )}
@@ -74,11 +75,11 @@ export default function AuthGate() {
           <button
             onClick={handleGoogleSignIn}
             disabled={loading}
-            className="w-full py-3.5 px-4 rounded-2xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700 hover:border-cyan-500/60 text-white text-xs font-bold flex items-center justify-center gap-3 transition-all cursor-pointer shadow-lg hover:shadow-cyan-500/20 group transform hover:-translate-y-0.5 active:translate-y-0"
+            className="w-full py-3.5 px-4 rounded-2xl bg-gray-50 dark:bg-gray-950 hover:bg-gray-100 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-rose-500 text-gray-800 dark:text-white text-xs font-bold flex items-center justify-center gap-3 transition-all cursor-pointer shadow-md hover:shadow-rose-500/20 group transform hover:-translate-y-0.5 active:translate-y-0"
           >
             {loading ? (
               <>
-                <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+                <Loader2 className="w-4 h-4 text-rose-500 animate-spin" />
                 <span>Authenticating with Google...</span>
               </>
             ) : (

@@ -2,13 +2,13 @@ import React, { useState } from 'react';
 import { X, FolderPlus, Palette } from 'lucide-react';
 
 const FOLDER_COLORS = [
-  '#38bdf8', // Cyan
+  '#e11d48', // Rose / Red
   '#3b82f6', // Blue
   '#8b5cf6', // Purple
   '#ec4899', // Pink
   '#10b981', // Emerald
   '#f59e0b', // Amber
-  '#ef4444', // Red
+  '#ef4444', // Crimson Red
   '#64748b', // Slate
 ];
 
@@ -27,21 +27,21 @@ export default function FolderModal({ isOpen, onClose, onCreateFolder, parentFol
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
-      <div className="glass-modal w-full max-w-md rounded-3xl overflow-hidden border border-slate-700/80 shadow-2xl p-6 space-y-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-fade-in select-none">
+      <div className="glass-modal w-full max-w-md rounded-3xl overflow-hidden border border-gray-200 dark:border-gray-800 shadow-2xl p-6 space-y-5 bg-white dark:bg-gray-900">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center shadow-md"
+              className="w-9 h-9 rounded-2xl flex items-center justify-center shadow-md"
               style={{ backgroundColor: `${selectedColor}20` }}
             >
               <FolderPlus className="w-5 h-5" style={{ color: selectedColor }} />
             </div>
-            <h3 className="text-sm font-bold text-slate-100">Create New Folder</h3>
+            <h3 className="text-sm font-bold text-gray-900 dark:text-white">Create New Folder</h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -49,7 +49,7 @@ export default function FolderModal({ isOpen, onClose, onCreateFolder, parentFol
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300">Folder Name</label>
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Folder Name</label>
             <input
               type="text"
               required
@@ -57,13 +57,13 @@ export default function FolderModal({ isOpen, onClose, onCreateFolder, parentFol
               placeholder="e.g. Work Documents, Vacation Photos"
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700/80 text-sm text-slate-100 focus:border-cyan-500 outline-none"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 text-slate-400" />
+            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-gray-400" />
               <span>Folder Color</span>
             </label>
             <div className="flex items-center gap-2.5 pt-1">
@@ -74,7 +74,7 @@ export default function FolderModal({ isOpen, onClose, onCreateFolder, parentFol
                   onClick={() => setSelectedColor(c)}
                   style={{ backgroundColor: c }}
                   className={`w-7 h-7 rounded-full transition-transform cursor-pointer ${
-                    selectedColor === c ? 'ring-2 ring-white scale-110 shadow-lg' : 'opacity-80 hover:opacity-100'
+                    selectedColor === c ? 'ring-2 ring-rose-500 scale-110 shadow-lg' : 'opacity-80 hover:opacity-100'
                   }`}
                 />
               ))}
@@ -85,13 +85,13 @@ export default function FolderModal({ isOpen, onClose, onCreateFolder, parentFol
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+              className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/25 transition-all cursor-pointer"
+              className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer"
             >
               Create Folder
             </button>
