@@ -402,7 +402,7 @@ export default function FileExplorer({
           )}
         </div>
 
-        {/* Loading Skeleton State */}
+        {/* Loading Skeleton State — only on first/user-triggered load, never during silent bg polling */}
         {loadingFiles && files.length === 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4 animate-pulse">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -430,7 +430,7 @@ export default function FileExplorer({
           </div>
         )}
 
-        {/* Empty State */}
+        {/* Full Empty State — only when NO files AND NO folders/trash items exist */}
         {!loadingFiles && files.length === 0 && (currentView === 'trash' ? trashedFolders.length === 0 : activeSubfolders.length === 0) && (
           <div className="flex-1 flex flex-col items-center justify-center p-8 sm:p-12 text-center border border-dashed border-slate-800 rounded-3xl bg-slate-900/20 my-auto">
             <div className="w-16 h-16 rounded-3xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 mb-4 shadow-lg shadow-sky-500/10">
@@ -454,6 +454,15 @@ export default function FileExplorer({
             )}
           </div>
         )}
+
+        {/* Subtle no-files hint when folders exist but no files — avoids blank space */}
+        {!loadingFiles && files.length === 0 && currentView !== 'trash' && activeSubfolders.length > 0 && (
+          <div className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-900/30 border border-slate-800/50 text-slate-500 text-xs">
+            <CloudUpload className="w-4 h-4 shrink-0 text-slate-600" />
+            <span>No files in this location yet. Upload files or open a folder to see its contents.</span>
+          </div>
+        )}
+
 
         {/* Grid View */}
         {viewMode === 'grid' && files.length > 0 && (

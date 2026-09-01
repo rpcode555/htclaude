@@ -81,9 +81,11 @@ function MainApp() {
   };
 
   // Load files matching current view filters
-  const loadFiles = async () => {
+  // silent=true: background polling — don't show loading skeleton, just silently update
+  // silent=false (default): user-triggered — show skeleton while loading
+  const loadFiles = async (silent = false) => {
     if (!isAuthorized || currentView === 'admin' || currentView === 'developer') return;
-    setLoadingFiles(true);
+    if (!silent) setLoadingFiles(true);
     try {
       const filter =
         currentView === 'trash'
@@ -111,7 +113,7 @@ function MainApp() {
     } catch (err) {
       console.error('[App] Load files error:', err);
     } finally {
-      setLoadingFiles(false);
+      if (!silent) setLoadingFiles(false);
     }
   };
 
@@ -128,10 +130,11 @@ function MainApp() {
   }, [isAuthorized, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
 
   // Real-time background sync interval (checks every 5s for live updates across devices/tabs)
+  // Uses silent=true so it never triggers skeleton loaders during background refresh
   useEffect(() => {
     if (!isAuthorized) return;
     const interval = setInterval(() => {
-      loadFiles();
+      loadFiles(true); // silent — no skeleton flash
       loadData();
     }, 5000);
     return () => clearInterval(interval);
