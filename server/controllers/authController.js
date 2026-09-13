@@ -3,15 +3,33 @@ const { getSetting, setSetting, getAllSettings } = require('../db');
 
 exports.getStatus = async (req, res) => {
   try {
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+
+    // Auto-reconnect with client session if serverless container is fresh / stateless
+    if (clientSession && !isManualDisconnected) {
+      const currentStatus = await telegramService.getStatus();
+      if (!currentStatus.connected) {
+        try {
+          const apiId = await getSetting('api_id');
+          const apiHash = await getSetting('api_hash');
+          await telegramService.connectSessionString(apiId, apiHash, clientSession);
+        } catch (e) {
+          console.warn('[Auth] Auto-reconnect with client session notice:', e.message);
+        }
+      }
+    }
+
     const status = await telegramService.getStatus();
     const settings = await getAllSettings();
+    const activeSession = (await getSetting('session_string')) || clientSession || '';
 
     // Redact sensitive keys
     const safeSettings = {
       auth_type: status.authType,
       api_id: settings.api_id ? '******' + settings.api_id.slice(-3) : '',
       phone_number: settings.phone_number ? '******' + settings.phone_number.slice(-4) : '',
-      has_session: !!(process.env.TELEGRAM_SESSION_STRING || settings.session_string),
+      has_session: !!(process.env.TELEGRAM_SESSION_STRING || settings.session_string || clientSession),
       chat_id: 'me',
       auto_backup: settings.auto_backup || '1',
     };
@@ -19,6 +37,7 @@ exports.getStatus = async (req, res) => {
     res.json({
       success: true,
       ...status,
+      sessionString: status.connected ? activeSession : '',
       settings: safeSettings,
     });
   } catch (err) {

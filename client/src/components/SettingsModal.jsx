@@ -76,6 +76,9 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         const res = await api.checkQrCode(currentSession, '', apiId.trim() || null, apiHash.trim() || null);
         if (res.status === 'success' || res.success) {
           stopQrPolling();
+          if (res.sessionString) {
+            localStorage.setItem('htc_tg_session', res.sessionString);
+          }
           setSuccessMsg('Successfully linked Telegram Saved Messages via QR Code!');
           await onRefreshStatus();
         } else if (res.status === 'requires2FA') {
@@ -135,6 +138,9 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         apiHash.trim() || null
       );
       if (res.status === 'success' || res.success) {
+        if (res.sessionString) {
+          localStorage.setItem('htc_tg_session', res.sessionString);
+        }
         setSuccessMsg('Successfully logged into Telegram Saved Messages!');
         await onRefreshStatus();
       } else {
@@ -148,7 +154,13 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   };
 
   useEffect(() => {
-    if (activeTab === 'saved_messages' && loginMethod === 'qr' && !authStatus?.connected) {
+    const hasLocalSession = !!localStorage.getItem('htc_tg_session');
+    if (hasLocalSession && !authStatus?.connected) {
+      onRefreshStatus?.();
+      return;
+    }
+
+    if (activeTab === 'saved_messages' && loginMethod === 'qr' && !authStatus?.connected && !hasLocalSession) {
       if (!qrDataUrl && !qrLoading) {
         loadQrCode();
       }
@@ -225,7 +237,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
       if (res.requires2FA) {
         setRequires2FA(true);
         setErrorMsg('Please enter your Two-Step Verification (2FA) password.');
-      } else if (res.success) {
+      } else if (res.success || res.status === 'success') {
+        if (res.sessionString) {
+          localStorage.setItem('htc_tg_session', res.sessionString);
+        }
         setSuccessMsg('Successfully connected to Telegram Saved Messages!');
         await onRefreshStatus();
       } else {
@@ -248,6 +263,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     try {
       const res = await api.connectSessionString(sessionStringInput.trim(), apiId.trim() || null, apiHash.trim() || null);
       if (res.success) {
+        const sess = res.sessionString || sessionStringInput.trim();
+        if (sess) {
+          localStorage.setItem('htc_tg_session', sess);
+        }
         setSuccessMsg(`Successfully connected to Telegram Saved Messages!`);
         await onRefreshStatus();
       } else {
@@ -291,6 +310,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     if (ok) {
       setLoading(true);
       try {
+        localStorage.removeItem('htc_tg_session');
         await api.disconnect();
         await onRefreshStatus();
         setSuccessMsg('Disconnected from Telegram. Now using Sandbox Mode.');

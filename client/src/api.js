@@ -5,12 +5,17 @@ import { auth } from './firebase';
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
 
 async function getAuthHeader() {
+  const headers = {};
   const user = auth.currentUser;
   if (user) {
     const token = await user.getIdToken();
-    return { Authorization: `Bearer ${token}` };
+    headers['Authorization'] = `Bearer ${token}`;
   }
-  return {};
+  const tgSession = localStorage.getItem('htc_tg_session');
+  if (tgSession) {
+    headers['X-Telegram-Session'] = tgSession;
+  }
+  return headers;
 }
 
 async function safeJson(res) {
@@ -87,8 +92,16 @@ export const api = {
   // --- Auth & Telegram Connection ---
   async getStatus() {
     const headers = await getAuthHeader();
-    const res = await fetch(`${API_BASE}/auth/status`, { headers });
-    return await safeJson(res);
+    const tgSession = localStorage.getItem('htc_tg_session');
+    const url = tgSession ? `${API_BASE}/auth/status?session=${encodeURIComponent(tgSession)}` : `${API_BASE}/auth/status`;
+    const res = await fetch(url, { headers });
+    const data = await safeJson(res);
+    if (data?.connected && data?.sessionString) {
+      localStorage.setItem('htc_tg_session', data.sessionString);
+    } else if (data?.manualDisconnect) {
+      localStorage.removeItem('htc_tg_session');
+    }
+    return data;
   },
 
   async sendPhoneCode(phoneNumber, apiId = null, apiHash = null) {
@@ -117,7 +130,11 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, password, phoneCodeHash, phoneNumber, tempSession }),
     });
-    return await safeJson(res);
+    const data = await safeJson(res);
+    if ((data.success || data.status === 'success') && data.sessionString) {
+      localStorage.setItem('htc_tg_session', data.sessionString);
+    }
+    return data;
   },
 
   async getQrCode(apiId = null, apiHash = null) {
@@ -137,7 +154,11 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ tempSession, password, apiId, apiHash }),
     });
-    return await safeJson(res);
+    const data = await safeJson(res);
+    if ((data.success || data.status === 'success') && data.sessionString) {
+      localStorage.setItem('htc_tg_session', data.sessionString);
+    }
+    return data;
   },
 
   async connectSessionString(sessionString, apiId = null, apiHash = null) {
@@ -160,7 +181,12 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return await safeJson(res);
+    const data = await safeJson(res);
+    if (data.success) {
+      const sess = data.sessionString || (typeof sessionString === 'string' ? sessionString : body.sessionString);
+      if (sess) localStorage.setItem('htc_tg_session', sess);
+    }
+    return data;
   },
 
   async backupDatabase() {
@@ -174,6 +200,7 @@ export const api = {
 
   async disconnect() {
     const headers = await getAuthHeader();
+    localStorage.removeItem('htc_tg_session');
     const res = await fetch(`${API_BASE}/auth/disconnect`, {
       method: 'POST',
       headers,
@@ -346,6 +373,10 @@ export const api = {
       if (token) {
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       }
+      const tgSession = localStorage.getItem('htc_tg_session');
+      if (tgSession) {
+        xhr.setRequestHeader('X-Telegram-Session', tgSession);
+      }
       xhr.send(formData);
     });
   },
@@ -385,11 +416,15 @@ export const api = {
   },
 
   getDownloadUrl(fileId) {
-    return `${API_BASE}/files/${fileId}/download`;
+    const tgSession = localStorage.getItem('htc_tg_session');
+    const param = tgSession ? `?session=${encodeURIComponent(tgSession)}` : '';
+    return `${API_BASE}/files/${fileId}/download${param}`;
   },
 
   getStreamUrl(fileId) {
-    return `${API_BASE}/files/${fileId}/stream`;
+    const tgSession = localStorage.getItem('htc_tg_session');
+    const param = tgSession ? `?session=${encodeURIComponent(tgSession)}` : '';
+    return `${API_BASE}/files/${fileId}/stream${param}`;
   },
 
   async updateFile(id, updates) {

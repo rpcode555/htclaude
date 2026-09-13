@@ -45,6 +45,27 @@ router.use((req, res, next) => {
   next();
 });
 
+// Auto-sync Telegram session token from client requests (essential for stateless/serverless runtimes)
+router.use(async (req, res, next) => {
+  try {
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    if (clientSession && clientSession.length > 20) {
+      const { getSetting, setSetting } = require('../db');
+      const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+      if (!isManualDisconnected) {
+        const currentSession = await getSetting('session_string');
+        if (!currentSession || currentSession !== clientSession) {
+          await setSetting('session_string', clientSession);
+          await setSetting('auth_type', 'saved_messages');
+        }
+      }
+    }
+  } catch (e) {
+    // Non-blocking
+  }
+  next();
+});
+
 // --- Public Firebase Config (Served dynamically from backend environment) ---
 router.get('/config/firebase', (req, res) => {
   res.json({

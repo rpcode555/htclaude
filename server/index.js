@@ -59,7 +59,7 @@ app.use(
       return callback(null, false);
     },
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'X-API-Key', 'x-api-key', 'X-API-Token', 'x-api-token', 'Accept', 'Origin'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'X-API-Key', 'x-api-key', 'X-API-Token', 'x-api-token', 'X-Telegram-Session', 'x-telegram-session', 'Accept', 'Origin'],
     exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Disposition'],
     credentials: true,
   })

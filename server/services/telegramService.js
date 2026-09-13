@@ -223,10 +223,13 @@ class TelegramService {
       }
     }
 
+    const activeSession = this.client?.session?.save?.() || sessionString || '';
+
     return {
       connected: !!userDetails,
       authType: userDetails ? 'saved_messages' : 'demo',
       configuredType: 'saved_messages',
+      sessionString: userDetails ? activeSession : '',
       user: userDetails || {
         firstName: isManualDisconnected ? 'Disconnected' : 'Guest User',
         username: '',
@@ -400,6 +403,7 @@ class TelegramService {
     return {
       status: 'success',
       success: true,
+      sessionString,
       user: {
         id: me.id.toString(),
         firstName: me.firstName,
@@ -591,6 +595,7 @@ class TelegramService {
     const me = await client.getMe();
     return {
       success: true,
+      sessionString: sessionString.trim(),
       user: {
         id: me.id.toString(),
         firstName: me.firstName || '',
