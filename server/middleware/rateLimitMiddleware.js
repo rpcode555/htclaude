@@ -3,6 +3,8 @@
 
 const requestBuckets = new Map();
 
+const MAX_BUCKETS = 5000;
+
 // Periodic cleanup of stale IP buckets every 5 minutes to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
@@ -24,16 +26,16 @@ function createRateLimiter({ windowMs = 60 * 1000, maxRequests = 100, message = 
   return (req, res, next) => {
     if (req.method === 'OPTIONS') return next();
 
-    // Determine client IP reliably (supports Cloudflare, Vercel, Nginx proxies)
-    const clientIp =
-      req.headers['cf-connecting-ip'] ||
-      req.headers['x-real-ip'] ||
-      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      '127.0.0.1';
+    // Determine client IP safely through Express trust-proxy
+    const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
 
     const now = Date.now();
     const bucketKey = `${clientIp}:${req.baseUrl || req.path}`;
+
+    if (requestBuckets.size >= MAX_BUCKETS) {
+      const oldestKey = requestBuckets.keys().next().value;
+      if (oldestKey) requestBuckets.delete(oldestKey);
+    }
 
     let bucket = requestBuckets.get(bucketKey);
 

@@ -56,7 +56,7 @@ export default function AdminPanel({
 
       const data = await api.uploadFilesWithProgress([testFile], null);
       if (data.success) {
-        setTestResult(`✅ Test file uploaded to Storage Channel! Message ID: #${data.files?.[0]?.telegram_msg_id || 'N/A'}`);
+        setTestResult(`✅ Test file uploaded to Saved Messages! Message ID: #${data.files?.[0]?.telegram_msg_id || 'N/A'}`);
         await onRefreshData();
       } else {
         setTestResult(`❌ Test upload failed: ${data.error || 'Unknown error'}`);
@@ -170,43 +170,37 @@ export default function AdminPanel({
 
       {/* Grid Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {/* Card 1: Telegram Bot & Backend Health */}
+        {/* Card 1: Telegram Saved Messages & Cloud Storage */}
         <div className="glass-card p-5 rounded-2xl border border-gray-200 dark:border-gray-800 space-y-4 shadow-xs">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-500">
                 <Send className="w-4 h-4" />
               </div>
-              <h3 className="text-sm font-bold text-gray-900 dark:text-white">Cloud Storage Backend</h3>
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white">Telegram Saved Messages</h3>
             </div>
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
           </div>
 
           <div className="space-y-2.5 text-xs">
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 dark:bg-gray-900/80 border border-gray-200 dark:border-gray-800">
-              <span className="text-gray-500 dark:text-gray-400">Bot Username</span>
-              <a
-                href="https://t.me/claudestorage_bot"
-                target="_blank"
-                rel="noreferrer"
-                className="text-rose-600 dark:text-rose-400 font-semibold hover:underline flex items-center gap-1"
-              >
-                <span>@claudestorage_bot</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+              <span className="text-gray-500 dark:text-gray-400">Telegram Mode</span>
+              <span className="text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1">
+                MTProto (User Client)
+              </span>
             </div>
 
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 dark:bg-gray-900/80 border border-gray-200 dark:border-gray-800">
               <span className="text-gray-500 dark:text-gray-400">Storage Target</span>
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                <Check className="w-3.5 h-3.5" /> Connected (Cloud Channel)
+                <Check className="w-3.5 h-3.5" /> Saved Messages ('me')
               </span>
             </div>
 
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50 dark:bg-gray-900/80 border border-gray-200 dark:border-gray-800">
-              <span className="text-gray-500 dark:text-gray-400">Backend API</span>
+              <span className="text-gray-500 dark:text-gray-400">Max File Size</span>
               <span className="text-emerald-600 dark:text-emerald-400 font-mono font-medium">
-                /api/v1 (Operational)
+                Unlimited (Auto-Chunked)
               </span>
             </div>
 
@@ -334,13 +328,13 @@ export default function AdminPanel({
           </button>
 
           <a
-            href="https://t.me/claudestorage_bot"
+            href="https://web.telegram.org/a/#@me"
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold transition-colors"
           >
             <Send className="w-3.5 h-3.5 text-rose-500" />
-            <span>Open Storage Channel Bot</span>
+            <span>Open Saved Messages</span>
           </a>
         </div>
 

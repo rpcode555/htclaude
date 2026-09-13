@@ -13,50 +13,50 @@ if (fs.existsSync(serverEnvPath)) {
   dotenv.config();
 }
 
-const tokenCache = new Map(); // In-memory cache for valid tokens (TTL: 5 minutes) to avoid network overhead
+// In-memory bounded LRU-style cache for verified tokens (TTL: 5 minutes)
+const MAX_CACHE_ENTRIES = 500;
+const tokenCache = new Map();
 
 function getTargetAdminEmail() {
-  return (process.env.ADMIN_EMAIL || 'palranjan144@gmail.com').toLowerCase();
+  return (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 }
 
-async function requireAdminAuth(req, res, next) {
+function pruneTokenCache() {
+  const now = Date.now();
+  for (const [token, data] of tokenCache.entries()) {
+    if (data.expiry <= now) {
+      tokenCache.delete(token);
+    }
+  }
+  if (tokenCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = tokenCache.keys().next().value;
+    if (oldestKey) tokenCache.delete(oldestKey);
+  }
+}
+
+async function verifyAdminToken(idToken) {
+  if (!idToken || typeof idToken !== 'string') return null;
+
+  const targetAdmin = getTargetAdminEmail();
+  if (!targetAdmin) {
+    console.error('[Security Alert] ADMIN_EMAIL environment variable is not configured.');
+    return null;
+  }
+
+  // Check cache
+  const cached = tokenCache.get(idToken);
+  if (cached && cached.expiry > Date.now()) {
+    if (cached.email === targetAdmin) return cached;
+    return null;
+  }
+
+  const apiKey = process.env.FIREBASE_API_KEY;
+  if (!apiKey) {
+    console.error('[Security Alert] FIREBASE_API_KEY is not configured.');
+    return null;
+  }
+
   try {
-    if (req.method === 'OPTIONS') return next();
-
-    const targetAdmin = getTargetAdminEmail();
-    const authHeader = req.headers.authorization || req.headers.Authorization;
-    let idToken = null;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      idToken = authHeader.substring(7).trim();
-    } else if (req.query && req.query.token) {
-      // Support secure download links with token parameter
-      idToken = req.query.token;
-    }
-
-    if (!idToken) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized: Private storage system. Authentication token is required.',
-      });
-    }
-
-    // Check fast cache
-    const cached = tokenCache.get(idToken);
-    if (cached && cached.expiry > Date.now() && (!targetAdmin || cached.email === targetAdmin)) {
-      req.user = cached;
-      return next();
-    }
-
-    // Cryptographic verification via Google Identity Toolkit
-    const apiKey = process.env.FIREBASE_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        success: false,
-        error: 'Server configuration error: FIREBASE_API_KEY is not configured.',
-      });
-    }
-
     const verifyRes = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
       {
@@ -67,32 +67,69 @@ async function requireAdminAuth(req, res, next) {
     );
 
     const verifyData = await verifyRes.json();
-
     if (!verifyRes.ok || !verifyData.users || verifyData.users.length === 0) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized: Invalid or expired authentication token.',
-      });
+      return null;
     }
 
     const verifiedUser = verifyData.users[0];
     const userEmail = (verifiedUser.email || '').toLowerCase();
 
-    // Strict Admin Email Whitelist check
     if (userEmail !== targetAdmin) {
-      console.warn(`[Security Alert] Blocked unauthorized access attempt by: ${userEmail}`);
-      return res.status(403).json({
-        success: false,
-        error: `Forbidden: Access Denied. Only ${targetAdmin} is authorized.`,
-      });
+      console.warn(`[Security Alert] Blocked unauthorized user: ${userEmail}`);
+      return null;
     }
 
-    // Cache valid token for 5 minutes
-    tokenCache.set(idToken, {
+    const userData = {
       uid: verifiedUser.localId,
       email: userEmail,
       expiry: Date.now() + 5 * 60 * 1000,
-    });
+    };
+
+    pruneTokenCache();
+    tokenCache.set(idToken, userData);
+    return userData;
+  } catch (err) {
+    console.error('[Security] Token verification error:', err.message);
+    return null;
+  }
+}
+
+async function requireAdminAuth(req, res, next) {
+  try {
+    if (req.method === 'OPTIONS') return next();
+
+    const targetAdmin = getTargetAdminEmail();
+    if (!targetAdmin) {
+      return res.status(500).json({
+        success: false,
+        error: 'Server security configuration error: ADMIN_EMAIL is not set in environment.',
+      });
+    }
+
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    let idToken = null;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      idToken = authHeader.substring(7).trim();
+    } else if (req.query && req.query.token) {
+      // Allow token in query parameter for browser downloads / direct media links
+      idToken = req.query.token;
+    }
+
+    if (!idToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized: Private storage system. Authentication token is required.',
+      });
+    }
+
+    const verifiedUser = await verifyAdminToken(idToken);
+    if (!verifiedUser) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden: Access Denied. Invalid token or account not authorized.',
+      });
+    }
 
     req.user = verifiedUser;
     next();
@@ -104,5 +141,6 @@ async function requireAdminAuth(req, res, next) {
 
 module.exports = {
   requireAdminAuth,
+  verifyAdminToken,
   getTargetAdminEmail,
 };

@@ -4,11 +4,11 @@
  * with local caching for 100% resilient real-time persistence.
  */
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://digezrtjqvehgyzmyfjz.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpZ2V6cnRqcXZlaGd5em15Zmp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1NjQ2NzIsImV4cCI6MjEwMTE0MDY3Mn0.7SvpnT-uur1HrdcZ_I29_ehomfBU-fyvT-plz7nKe90';
+const SUPABASE_URL = process.env.SUPABASE_URL || null;
+const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || null;
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'melodic-keyword-374810';
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || null;
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || null;
 
 const firestoreService = require('./firestoreService');
 

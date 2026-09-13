@@ -34,24 +34,39 @@ app.use((req, res, next) => {
   next();
 });
 
-// CORS Setup (Flexible & Secured)
+// CORS Configuration with strict origin verification
+const allowedOrigins = [
+  process.env.APP_URL,
+  process.env.CUSTOM_DOMAIN ? (process.env.CUSTOM_DOMAIN.startsWith('http') ? process.env.CUSTOM_DOMAIN : `https://${process.env.CUSTOM_DOMAIN}`) : null,
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5000',
+].filter(Boolean);
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, Postman, server-to-server)
+      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
-      // Allow localhost and external clients
-      return callback(null, true);
+      // Check whitelist or same-origin
+      if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      // Disallow all other origins
+      return callback(null, false);
     },
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'X-API-Key', 'x-api-key', 'X-API-Token', 'x-api-token', 'Accept', 'Origin'],
     exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Disposition'],
     credentials: true,
   })
 );
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // Global Rate Limiting on API endpoints
 app.use('/api', apiLimiter, apiRoutes);
@@ -96,16 +111,22 @@ app.use((req, res) => {
 
 // Start Server if run directly
 if (process.env.NODE_ENV !== 'production' || require.main === module) {
-  app.listen(PORT, '0.0.0.0', async () => {
+  const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`=========================================`);
     console.log(`🔒 Hightech Claude Server: http://localhost:${PORT}`);
-    console.log(`🛡️ Admin Whitelist: ${process.env.ADMIN_EMAIL || 'palranjan144@gmail.com'}`);
+    console.log(`🛡️ Admin Whitelist: ${process.env.ADMIN_EMAIL || 'Not configured'}`);
     console.log(`📁 API endpoint: http://localhost:${PORT}/api`);
+    console.log(`🚀 Unlimited File Size & Chunking: Enabled`);
     console.log(`=========================================`);
 
     // Initialize Telegram background client
     await telegramService.init();
   });
+
+  // Remove socket timeout for unlimited multi-GB file uploads/downloads
+  server.timeout = 0;
+  server.keepAliveTimeout = 1200000; // 20 minutes
+  server.headersTimeout = 1205000;
 }
 
 module.exports = app;

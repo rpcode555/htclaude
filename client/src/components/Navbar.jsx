@@ -3,6 +3,7 @@ import {
   Search,
   Upload,
   FolderPlus,
+  FilePlus,
   LayoutGrid,
   List,
   ArrowUpDown,
@@ -31,6 +32,7 @@ export default function Navbar({
   setSortOrder,
   onUploadClick,
   onNewFolderClick,
+  onNewFileClick,
   onOpenSettings,
   onOpenAdminPanel,
   onOpenAuthModal,
@@ -261,6 +263,16 @@ export default function Navbar({
             >
               <FolderPlus className="w-3.5 h-3.5 text-rose-500 shrink-0" />
               <span>New Folder</span>
+            </button>
+
+            {/* New File / Note Button (Desktop / Tablet) */}
+            <button
+              onClick={onNewFileClick}
+              title="Create New File / Note"
+              className="btn-secondary hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs cursor-pointer dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
+            >
+              <FilePlus className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+              <span>New File</span>
             </button>
 
             {/* Upload Button — Mobile (Compact) */}

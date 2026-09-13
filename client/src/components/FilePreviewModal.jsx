@@ -22,12 +22,16 @@ import {
   Minimize2,
   StretchHorizontal,
   Trash2,
+  Share2,
+  Edit3,
+  Save,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { formatBytes, formatDate } from '../utils';
 
-export default function FilePreviewModal({ file, onClose, onDownload, onTrash }) {
+export default function FilePreviewModal({ file, onClose, onDownload, onTrash, onFileUpdated }) {
   const { currentUser } = useAuth();
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -35,6 +39,11 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
   const [textContent, setTextContent] = useState(null);
   const [loadingText, setLoadingText] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedShare, setCopiedShare] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [streamUrl, setStreamUrl] = useState('');
   const [mediaLoading, setMediaLoading] = useState(true);
@@ -115,6 +124,41 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
       navigator.clipboard.writeText(textContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleCopyShareLink = async () => {
+    const shareUrl = `${window.location.origin}/share/${file.id}`;
+    navigator.clipboard.writeText(shareUrl);
+    try {
+      if (!file.is_shared) {
+        await api.updateFile(file.id, { is_shared: 1 });
+        file.is_shared = 1;
+      }
+    } catch (e) {}
+    setCopiedShare(true);
+    setTimeout(() => setCopiedShare(false), 2200);
+  };
+
+  const handleSaveContent = async () => {
+    setSavingEdit(true);
+    try {
+      const res = await api.updateFileContent(file.id, editContent);
+      if (res.success) {
+        setTextContent(editContent);
+        setIsEditing(false);
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 3000);
+        if (onFileUpdated && res.file) {
+          onFileUpdated(res.file);
+        }
+      } else {
+        alert(res.error || 'Failed to save file content.');
+      }
+    } catch (err) {
+      alert(`Save error: ${err.message}`);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -324,18 +368,70 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
         <div className="flex-1 flex flex-col overflow-hidden p-4 sm:p-6 relative w-full h-full bg-slate-950/40">
           {loadingText && renderLoader('Parsing Document Contents...')}
           <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800 text-xs text-slate-400 shrink-0">
-            <span className="font-semibold text-slate-300">Document Content Preview</span>
-            <button
-              onClick={handleCopyText}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors cursor-pointer"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Copied' : 'Copy Text'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-300">
+                {isEditing ? 'Editing File Content' : 'Document Content Preview'}
+              </span>
+              {saveSuccess && (
+                <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1 animate-fade-in">
+                  <Check className="w-3 h-3" /> Saved to Cloud
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveContent}
+                    disabled={savingEdit}
+                    className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer shadow-sm"
+                  >
+                    {savingEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    <span>{savingEdit ? 'Saving...' : 'Save Changes'}</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      setEditContent(textContent || '');
+                      setIsEditing(true);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-400 hover:text-rose-300 text-xs font-semibold cursor-pointer transition-colors"
+                    title="Edit note or code content in place"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit File</span>
+                  </button>
+                  <button
+                    onClick={handleCopyText}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors cursor-pointer"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Copied' : 'Copy Text'}</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
-          <div className="flex-1 overflow-auto bg-slate-950/90 rounded-2xl p-6 font-mono text-xs sm:text-sm text-slate-200 border border-slate-800/80 select-text leading-relaxed w-full">
-            {loadingText ? (
+          <div className="flex-1 overflow-auto bg-slate-950/90 rounded-2xl p-6 font-mono text-xs sm:text-sm text-slate-200 border border-slate-800/80 leading-relaxed w-full flex flex-col">
+            {isEditing ? (
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="w-full flex-1 bg-transparent text-slate-100 font-mono text-xs sm:text-sm outline-none resize-none leading-relaxed p-0 border-0 focus:ring-0 select-text"
+                placeholder="Type your notes or code..."
+                spellCheck={false}
+              />
+            ) : loadingText ? (
               <div className="space-y-3.5 py-6 animate-pulse">
                 <div className="h-4 bg-slate-800 rounded w-3/4" />
                 <div className="h-4 bg-slate-800/60 rounded w-1/2" />
@@ -345,7 +441,7 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
                 <div className="h-4 bg-slate-800/60 rounded w-3/5" />
               </div>
             ) : (
-              <pre className="whitespace-pre-wrap font-inherit">{textContent}</pre>
+              <pre className="whitespace-pre-wrap font-inherit select-text">{textContent}</pre>
             )}
           </div>
         </div>
@@ -446,6 +542,16 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash })
             title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+
+          {/* Public Read-Only Share Link */}
+          <button
+            onClick={handleCopyShareLink}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all cursor-pointer text-xs font-semibold"
+            title="Copy Public Read-Only View Link"
+          >
+            {copiedShare ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4 text-rose-400" />}
+            <span className="hidden sm:inline">{copiedShare ? 'Copied Link!' : 'Share'}</span>
           </button>
 
           {/* Direct Download Button */}

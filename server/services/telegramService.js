@@ -4,8 +4,9 @@ const { getSetting, setSetting, db, detectCategory } = require('../db');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
+const { NewMessage } = require('telegram/events');
 
-const { UPLOADS_DIR, CACHE_DIR } = require('../config/paths');
+const { UPLOADS_DIR, CACHE_DIR, DATA_DIR, isSafePath } = require('../config/paths');
 
 try {
   if (!fs.existsSync(UPLOADS_DIR)) {
@@ -16,94 +17,46 @@ try {
   }
 } catch (e) {}
 
-function normalizeChannelId(chatId) {
-  if (!chatId) return '';
-  let idStr = chatId.toString().trim();
-  if (idStr === 'me') return 'me';
-  if (idStr.startsWith('@')) return idStr;
-  if (!idStr.startsWith('-')) {
-    if (idStr.startsWith('100')) {
-      return `-${idStr}`;
-    }
-    return `-100${idStr}`;
-  }
-  return idStr;
-}
-
 class TelegramService {
   constructor() {
     this.client = null;
-    this.authType = 'bot';
-    this.botPollingActive = false;
-    this.lastUpdateId = 0;
-    this.botInfo = null;
+    this.authType = 'saved_messages';
+    this.tempClient = null;
+    this.tempPhoneCodeHash = null;
+    this.tempPhoneNumber = null;
+    this.listenerAttached = false;
   }
 
   /**
-   * Helper to retrieve bot token securely from backend env / db
-   */
-  async getBotToken() {
-    return process.env.TELEGRAM_BOT_TOKEN || (await getSetting('bot_token')) || '';
-  }
-
-  /**
-   * Helper to retrieve channel ID securely from backend env / db
-   */
-  async getChannelId() {
-    const rawId = process.env.TELEGRAM_CHANNEL_ID || process.env.TELEGRAM_CHAT_ID || (await getSetting('chat_id')) || '';
-    return normalizeChannelId(rawId);
-  }
-
-  /**
-   * Initializes the Telegram client or bot using stored settings
+   * Initializes the Telegram MTProto client for Saved Messages using stored session
    */
   async init() {
     try {
-      const authType = (await getSetting('auth_type')) || process.env.TELEGRAM_AUTH_TYPE || 'bot';
-      this.authType = authType;
+      this.authType = 'saved_messages';
 
-      if (authType === 'saved_messages') {
-        const apiId = parseInt(process.env.TELEGRAM_API_ID || (await getSetting('api_id')));
-        const apiHash = process.env.TELEGRAM_API_HASH || (await getSetting('api_hash'));
-        const sessionString = process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')) || '';
+      const apiId = parseInt(process.env.TELEGRAM_API_ID || (await getSetting('api_id')));
+      const apiHash = process.env.TELEGRAM_API_HASH || (await getSetting('api_hash'));
+      const sessionString = process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')) || '';
 
-        if (apiId && apiHash && sessionString) {
-          const stringSession = new StringSession(sessionString);
-          this.client = new TelegramClient(stringSession, apiId, apiHash, {
-            connectionRetries: 5,
-            useWSS: false,
-          });
+      if (apiId && apiHash && sessionString) {
+        const stringSession = new StringSession(sessionString);
+        this.client = new TelegramClient(stringSession, apiId, apiHash, {
+          connectionRetries: 5,
+          useWSS: false,
+        });
 
-          await this.client.connect();
-          const isAuth = await this.client.checkAuthorization();
-          if (isAuth) {
-            console.log('[Telegram] Connected to Telegram Saved Messages (MTProto)');
-          } else {
-            console.warn('[Telegram] Session string is invalid or expired.');
-            this.client = null;
-          }
-        }
-      }
-
-      // Check Bot configuration
-      const botToken = await this.getBotToken();
-      const channelId = await this.getChannelId();
-
-      if (botToken) {
-        const botRes = await this.getBotInfo(botToken);
-        if (botRes && botRes.ok) {
-          this.botInfo = botRes.result;
-          this.authType = 'bot';
-          console.log(`[Telegram] Connected as Bot @${this.botInfo.username} (${this.botInfo.first_name})`);
-          if (channelId) {
-            console.log(`[Telegram] Secure Storage Channel target: ${channelId}`);
-          }
-
-          // Start Telegram Bot Polling in background for real-time sync
-          this.startBotPolling(botToken);
+        await this.client.connect();
+        const isAuth = await this.client.checkAuthorization();
+        if (isAuth) {
+          const me = await this.client.getMe();
+          console.log(`[Telegram] Connected to Telegram Saved Messages as ${me.firstName || 'User'} (@${me.username || me.id})`);
+          this.setupSavedMessagesListener();
         } else {
-          console.warn('[Telegram] Bot token verification failed:', botRes);
+          console.warn('[Telegram] Session string is invalid or expired.');
+          this.client = null;
         }
+      } else {
+        console.log('[Telegram] No saved session found. Storage running in Sandbox/Demo mode until Telegram account is linked.');
       }
     } catch (err) {
       console.error('[Telegram] Init error:', err.message);
@@ -111,142 +64,90 @@ class TelegramService {
   }
 
   /**
-   * Starts background long polling for bot messages & uploaded files
+   * Real-time sync: Listens for files sent to "Saved Messages" in any Telegram client
    */
-  async startBotPolling(botToken) {
-    if (this.botPollingActive) return;
-    this.botPollingActive = true;
+  setupSavedMessagesListener() {
+    if (!this.client || this.listenerAttached) return;
 
-    const poll = async () => {
-      if (!this.botPollingActive) return;
+    try {
+      this.client.addEventHandler(async (event) => {
+        try {
+          const msg = event.message;
+          if (!msg || !msg.media) return;
 
-      try {
-        const url = `https://api.telegram.org/bot${botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=20`;
-        const res = await fetch(url);
-        const data = await res.json();
+          const me = await this.client.getMe();
+          if (!me) return;
 
-        if (data.ok && data.result && data.result.length > 0) {
-          for (const update of data.result) {
-            this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
-            await this.handleTelegramUpdate(botToken, update);
+          // Verify that this message was sent to Saved Messages ('me')
+          const peerId = msg.peerId?.userId?.toString();
+          if (peerId && peerId === me.id.toString()) {
+            await this.handleSavedMessageMedia(msg);
           }
+        } catch (err) {
+          console.warn('[Telegram Saved Messages] Event handler notice:', err.message);
         }
-      } catch (err) {
-        // Suppress network jitter in background polling
-      }
+      }, new NewMessage({}));
 
-      if (this.botPollingActive) {
-        setTimeout(poll, 1500);
-      }
-    };
-
-    poll();
+      this.listenerAttached = true;
+      console.log('[Telegram] Real-time listener active for Saved Messages');
+    } catch (e) {
+      console.warn('[Telegram] Could not attach real-time listener:', e.message);
+    }
   }
 
   /**
-   * Handle incoming messages, /start, and files sent to the bot
+   * Handle incoming media sent directly to Telegram Saved Messages
    */
-  async handleTelegramUpdate(botToken, update) {
-    const msg = update.message || update.channel_post;
-    if (!msg || !msg.chat) return;
-
-    const chatId = msg.chat.id.toString();
-
-    // Handle /start command
-    if (msg.text && msg.text.startsWith('/start')) {
-      await this.sendTextMessage(
-        botToken,
-        chatId,
-        `⚡ *Welcome to Hightech Claude Storage!*\n\n` +
-          `Your Telegram bot is securely connected to your cloud drive.\n\n` +
-          `📤 *Send any file, photo, video, or document here*, and it will instantly appear in your Hightech Claude web dashboard!\n\n` +
-          `🌐 Web Dashboard: http://localhost:3000`
-      );
-      return;
-    }
-
-    // Handle incoming file/document/photo/video from Telegram
-    let fileObj = null;
+  async handleSavedMessageMedia(msg) {
     let fileName = '';
     let mimeType = 'application/octet-stream';
     let fileSize = 0;
 
-    if (msg.document) {
-      fileObj = msg.document;
-      fileName = fileObj.file_name || `document_${Date.now()}`;
-      mimeType = fileObj.mime_type || 'application/octet-stream';
-      fileSize = fileObj.file_size || 0;
-    } else if (msg.photo && msg.photo.length > 0) {
-      fileObj = msg.photo[msg.photo.length - 1];
+    if (msg.media.document) {
+      const doc = msg.media.document;
+      fileSize = Number(doc.size) || 0;
+      mimeType = doc.mimeType || 'application/octet-stream';
+      if (Array.isArray(doc.attributes)) {
+        for (const attr of doc.attributes) {
+          if (attr.fileName) {
+            fileName = attr.fileName;
+            break;
+          }
+        }
+      }
+      if (!fileName) fileName = `document_${Date.now()}`;
+    } else if (msg.media.photo) {
       fileName = `photo_${Date.now()}.jpg`;
       mimeType = 'image/jpeg';
-      fileSize = fileObj.file_size || 0;
-    } else if (msg.video) {
-      fileObj = msg.video;
-      fileName = fileObj.file_name || `video_${Date.now()}.mp4`;
-      mimeType = fileObj.mime_type || 'video/mp4';
-      fileSize = fileObj.file_size || 0;
-    } else if (msg.audio) {
-      fileObj = msg.audio;
-      fileName = fileObj.file_name || fileObj.title || `audio_${Date.now()}.mp3`;
-      mimeType = fileObj.mime_type || 'audio/mpeg';
-      fileSize = fileObj.file_size || 0;
+      fileSize = 0;
     }
 
-    if (fileObj) {
+    if (fileName) {
       const category = detectCategory(mimeType, fileName);
-
-      // Save to files database
       await db.insertFile({
         name: fileName,
         original_name: fileName,
         mime_type: mimeType,
         size: fileSize,
         category,
-        telegram_msg_id: msg.message_id,
-        telegram_chat_id: chatId,
-        file_hash: fileObj.file_id,
+        telegram_msg_id: msg.id,
+        telegram_chat_id: 'me',
         storage_type: 'telegram',
       });
-
-      console.log(`[Telegram] Received and indexed file: ${fileName} (${fileSize} bytes)`);
-
-      // Reply back to user on Telegram
-      await this.sendTextMessage(
-        botToken,
-        chatId,
-        `✅ *Saved to Hightech Claude!*\n📁 \`${fileName}\`\n📊 Category: *${category}*`
-      );
+      console.log(`[Telegram Saved Messages] Indexed new media: ${fileName}`);
     }
-  }
-
-  async sendTextMessage(botToken, chatId, text) {
-    try {
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: text,
-          parse_mode: 'Markdown',
-        }),
-      });
-    } catch (e) {}
   }
 
   /**
    * Get current connection status and details (without leaking secrets)
    */
   async getStatus() {
-    const authType = (await getSetting('auth_type')) || process.env.TELEGRAM_AUTH_TYPE || 'bot';
     const apiId = process.env.TELEGRAM_API_ID || (await getSetting('api_id'));
     const hasSession = !!(process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')));
-    const botToken = await this.getBotToken();
-    const channelId = await this.getChannelId();
 
     let userDetails = null;
 
-    if (authType === 'saved_messages' && this.client) {
+    if (this.client) {
       try {
         const me = await this.client.getMe();
         if (me) {
@@ -263,65 +164,57 @@ class TelegramService {
       } catch (err) {
         console.error('[Telegram] Error getting user details:', err.message);
       }
-    } else if (botToken) {
-      const botRes = await this.getBotInfo(botToken);
-      if (botRes && botRes.ok) {
-        this.botInfo = botRes.result;
-        userDetails = {
-          id: botRes.result.id.toString(),
-          firstName: 'Hightech Claude',
-          username: botRes.result.username,
-          target: channelId ? `Channel (${channelId})` : `@${botRes.result.username}`,
-        };
-      }
     }
 
     return {
-      connected: !!userDetails || authType === 'demo',
-      authType: userDetails ? (authType === 'saved_messages' ? 'saved_messages' : 'bot') : 'demo',
-      configuredType: authType,
+      connected: !!userDetails,
+      authType: userDetails ? 'saved_messages' : 'demo',
+      configuredType: 'saved_messages',
       user: userDetails || {
-        firstName: 'Hightech Claude',
-        username: 'claudestorage_bot',
-        target: 'Telegram Bot Cloud Storage',
+        firstName: 'Guest User',
+        username: '',
+        target: 'Saved Messages (Offline / Sandbox)',
       },
       hasCredentials: {
         hasApiId: !!apiId,
         hasSession,
-        hasBotToken: !!botToken,
-        hasChannelId: !!channelId,
       },
-      channelConfigured: !!channelId,
     };
   }
 
   /**
-   * Send phone login OTP code
+   * Send phone login OTP code to Telegram app / SMS
    */
   async sendPhoneCode(apiId, apiHash, phoneNumber) {
+    const cleanApiId = parseInt(apiId);
+    if (!cleanApiId || !apiHash || !phoneNumber) {
+      throw new Error('API ID, API Hash, and Phone Number are required.');
+    }
+
     const stringSession = new StringSession('');
-    const client = new TelegramClient(stringSession, parseInt(apiId), apiHash, {
+    const client = new TelegramClient(stringSession, cleanApiId, apiHash.trim(), {
       connectionRetries: 5,
+      useWSS: false,
     });
 
     await client.connect();
 
     const { phoneCodeHash, isCodeViaApp } = await client.sendCode(
       {
-        apiId: parseInt(apiId),
-        apiHash,
+        apiId: cleanApiId,
+        apiHash: apiHash.trim(),
       },
-      phoneNumber
+      phoneNumber.trim()
     );
 
-    await setSetting('api_id', apiId.toString());
-    await setSetting('api_hash', apiHash);
-    await setSetting('phone_number', phoneNumber);
+    await setSetting('api_id', cleanApiId.toString());
+    await setSetting('api_hash', apiHash.trim());
+    await setSetting('phone_number', phoneNumber.trim());
     await setSetting('phone_code_hash', phoneCodeHash);
 
     this.tempClient = client;
     this.tempPhoneCodeHash = phoneCodeHash;
-    this.tempPhoneNumber = phoneNumber;
+    this.tempPhoneNumber = phoneNumber.trim();
 
     return {
       success: true,
@@ -334,7 +227,7 @@ class TelegramService {
   }
 
   /**
-   * Verify phone OTP code and complete MTProto login
+   * Verify phone OTP code and complete MTProto login to Saved Messages
    */
   async verifyPhoneCode(code, password = '') {
     const apiId = parseInt(await getSetting('api_id'));
@@ -347,6 +240,7 @@ class TelegramService {
       const stringSession = new StringSession('');
       client = new TelegramClient(stringSession, apiId, apiHash, {
         connectionRetries: 5,
+        useWSS: false,
       });
       await client.connect();
     }
@@ -356,7 +250,7 @@ class TelegramService {
         new Api.auth.SignIn({
           phoneNumber,
           phoneCodeHash,
-          phoneCode: code,
+          phoneCode: code.trim(),
         })
       );
     } catch (err) {
@@ -388,6 +282,7 @@ class TelegramService {
     this.client = client;
     this.authType = 'saved_messages';
     this.tempClient = null;
+    this.setupSavedMessagesListener();
 
     const me = await client.getMe();
     return {
@@ -396,52 +291,61 @@ class TelegramService {
         id: me.id.toString(),
         firstName: me.firstName,
         username: me.username,
+        phone: me.phone,
+        target: 'Saved Messages (me)',
       },
     };
   }
 
   /**
-   * Connect via Telegram Bot
+   * Direct login using an existing GramJS MTProto Session String
    */
-  async connectBot(botToken, chatId = '') {
-    const normalizedChatId = normalizeChannelId(chatId);
-    const botInfo = await this.getBotInfo(botToken);
-    if (!botInfo || !botInfo.ok) {
-      throw new Error(botInfo?.description || 'Invalid Telegram Bot Token');
+  async connectSessionString(apiId, apiHash, sessionString) {
+    const cleanApiId = parseInt(apiId);
+    if (!cleanApiId || !apiHash || !sessionString) {
+      throw new Error('API ID, API Hash, and Session String are all required.');
     }
 
-    await setSetting('bot_token', botToken);
-    if (normalizedChatId) await setSetting('chat_id', normalizedChatId);
-    await setSetting('auth_type', 'bot');
+    const stringSession = new StringSession(sessionString.trim());
+    const client = new TelegramClient(stringSession, cleanApiId, apiHash.trim(), {
+      connectionRetries: 5,
+      useWSS: false,
+    });
 
-    this.authType = 'bot';
-    this.botInfo = botInfo.result;
+    await client.connect();
+    const isAuth = await client.checkAuthorization();
+    if (!isAuth) {
+      throw new Error('Invalid or expired Telegram Session String.');
+    }
 
-    this.startBotPolling(botToken);
+    await setSetting('api_id', cleanApiId.toString());
+    await setSetting('api_hash', apiHash.trim());
+    await setSetting('session_string', sessionString.trim());
+    await setSetting('auth_type', 'saved_messages');
+    await setSetting('chat_id', 'me');
 
+    this.client = client;
+    this.authType = 'saved_messages';
+    this.setupSavedMessagesListener();
+
+    const me = await client.getMe();
     return {
       success: true,
-      bot: botInfo.result,
+      user: {
+        id: me.id.toString(),
+        firstName: me.firstName || '',
+        lastName: me.lastName || '',
+        username: me.username || '',
+        phone: me.phone || '',
+        target: 'Saved Messages (me)',
+      },
     };
   }
 
   /**
-   * Helper: call Bot API getMe
-   */
-  async getBotInfo(botToken) {
-    try {
-      const res = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
-      return await res.json();
-    } catch (err) {
-      return { ok: false, description: err.message };
-    }
-  }
-
-  /**
-   * Disconnect current session & revert to demo mode
+   * Disconnect current session & revert to sandbox demo mode
    */
   async disconnect() {
-    this.botPollingActive = false;
     if (this.client) {
       try {
         await this.client.disconnect();
@@ -452,17 +356,19 @@ class TelegramService {
     await setSetting('session_string', '');
     await setSetting('auth_type', 'demo');
     this.authType = 'demo';
+    this.listenerAttached = false;
 
     return { success: true };
   }
 
   /**
-   * Upload file to Telegram (Saved Messages or Storage Channel) or Local Sandbox
+   * Upload file directly to Telegram Saved Messages ('me') or local sandbox.
+   * Supports UNLIMITED file sizes by automatically chunking files exceeding 1.9GB.
    */
   async uploadFile({ originalName, buffer, mimeType, size, filePath = null }) {
-    const authType = (await getSetting('auth_type')) || process.env.TELEGRAM_AUTH_TYPE || 'bot';
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const localCachedDest = path.join(CACHE_DIR, `${Date.now()}_${safeName}`);
+    const MAX_TELEGRAM_SINGLE_FILE = 1900 * 1024 * 1024; // 1.9 GB safe ceiling for MTProto single document
 
     // Pre-cache uploaded buffer or file for instant 0ms preview right after upload
     if (filePath && fs.existsSync(filePath)) {
@@ -475,14 +381,70 @@ class TelegramService {
       } catch (e) {}
     }
 
-    // 1. Saved Messages MTProto Mode
-    if (authType === 'saved_messages' && this.client) {
+    // 1. Saved Messages MTProto Upload (supports unlimited size via automatic chunking)
+    if (this.client) {
       try {
+        // Case A: File exceeds 1.9GB -> Automatic Multi-Part Chunking for Unlimited Size
+        if (size > MAX_TELEGRAM_SINGLE_FILE && filePath && fs.existsSync(filePath)) {
+          const totalParts = Math.ceil(size / MAX_TELEGRAM_SINGLE_FILE);
+          const chunkMsgIds = [];
+          console.log(`[Telegram Saved Messages] File ${originalName} (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds 1.9GB Telegram limit. Automatically chunking into ${totalParts} parts...`);
+
+          for (let partIdx = 0; partIdx < totalParts; partIdx++) {
+            const start = partIdx * MAX_TELEGRAM_SINGLE_FILE;
+            const end = Math.min(size - 1, (partIdx + 1) * MAX_TELEGRAM_SINGLE_FILE - 1);
+            const partSize = end - start + 1;
+            const tempChunkPath = path.join(CACHE_DIR, `temp_chunk_${Date.now()}_${partIdx}_${safeName}`);
+
+            // Stream slice chunk to disk to keep RAM usage minimal
+            await new Promise((resolve, reject) => {
+              const rs = fs.createReadStream(filePath, { start, end });
+              const ws = fs.createWriteStream(tempChunkPath);
+              rs.pipe(ws);
+              ws.on('finish', resolve);
+              ws.on('error', reject);
+            });
+
+            const customFile = new CustomFile(
+              `${originalName}.part${String(partIdx + 1).padStart(3, '0')}`,
+              partSize,
+              tempChunkPath,
+              undefined
+            );
+
+            const result = await this.client.sendFile('me', {
+              file: customFile,
+              caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
+              forceDocument: true,
+              workers: 8,
+            });
+
+            chunkMsgIds.push(result.id);
+            console.log(`[Telegram Saved Messages] Uploaded chunk ${partIdx + 1}/${totalParts} (msg_id: ${result.id})`);
+
+            // Clean up temporary chunk file
+            try { fs.unlinkSync(tempChunkPath); } catch (e) {}
+          }
+
+          return {
+            storageType: 'telegram',
+            telegramMsgId: chunkMsgIds[0],
+            telegramChunkIds: chunkMsgIds,
+            telegramChatId: 'me',
+            isChunked: true,
+            totalParts,
+            localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
+            size: size,
+          };
+        }
+
+        // Case B: Single File Upload (< 1.9GB)
+        const fileContent = buffer || (filePath && fs.existsSync(filePath) && size < 10 * 1024 * 1024 ? fs.readFileSync(filePath) : undefined);
         const customFile = new CustomFile(
           originalName,
           size,
           filePath || '',
-          buffer || (filePath ? fs.readFileSync(filePath) : Buffer.alloc(0))
+          fileContent
         );
 
         const result = await this.client.sendFile('me', {
@@ -492,93 +454,64 @@ class TelegramService {
           workers: 8,
         });
 
+        console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);
+
         return {
           storageType: 'telegram',
           telegramMsgId: result.id,
+          telegramChunkIds: [result.id],
           telegramChatId: 'me',
+          isChunked: false,
+          totalParts: 1,
           localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
           size: size,
         };
       } catch (err) {
-        console.error('[Telegram] MTProto upload failed:', err);
+        console.error('[Telegram Saved Messages] MTProto upload failed:', err.message);
       }
     }
 
-    // 2. Telegram Bot Mode (Uploads directly to your Telegram Channel)
-    const botToken = await this.getBotToken();
-    const channelId = await this.getChannelId();
-
-    if (botToken && channelId && channelId !== 'me') {
-      try {
-        const fileData = buffer || (filePath ? fs.readFileSync(filePath) : null);
-        if (fileData) {
-          const fileBlob = new Blob([fileData], { type: mimeType });
-          const formData = new FormData();
-          formData.append('chat_id', channelId);
-          formData.append('document', fileBlob, originalName);
-          formData.append('caption', `📁 Hightech Claude: ${originalName}`);
-
-          const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-            method: 'POST',
-            body: formData,
-          });
-
-          const json = await response.json();
-          if (json.ok && json.result) {
-            const doc = json.result.document || json.result.video || json.result.audio || (json.result.photo ? json.result.photo[json.result.photo.length - 1] : null);
-            const fileId = doc ? doc.file_id : null;
-            const fileSize = (doc && doc.file_size) ? doc.file_size : size;
-
-            console.log(`[Telegram] Uploaded ${originalName} to channel ${channelId} (msg_id: ${json.result.message_id})`);
-            return {
-              storageType: 'telegram',
-              telegramMsgId: json.result.message_id,
-              telegramChatId: channelId,
-              fileHash: fileId,
-              localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
-              size: fileSize,
-            };
-          } else {
-            console.warn('[Telegram] Channel upload error response:', json);
-          }
-        }
-      } catch (err) {
-        console.error('[Telegram] Bot upload to channel error:', err);
-      }
-    }
-
-    // 3. Fallback / Local Storage
+    // 2. Fallback: Local Storage (Sandbox mode when Telegram is disconnected)
     const localFileName = `${Date.now()}_${safeName}`;
     const localDest = path.join(UPLOADS_DIR, localFileName);
 
     if (filePath && fs.existsSync(filePath)) {
-      fs.copyFileSync(filePath, localDest);
+      try {
+        fs.copyFileSync(filePath, localDest);
+      } catch (e) {
+        console.error('[Storage] Error copying to local uploads:', e.message);
+      }
     } else if (buffer) {
-      fs.writeFileSync(localDest, buffer);
+      try {
+        fs.writeFileSync(localDest, buffer);
+      } catch (e) {
+        console.error('[Storage] Error writing buffer to local uploads:', e.message);
+      }
     }
 
     return {
       storageType: 'local',
       localPath: localDest,
       telegramMsgId: null,
+      telegramChunkIds: null,
       telegramChatId: null,
       size: size,
     };
   }
 
   /**
-   * Download / Stream a file with high-speed Multi-Tiered Cache (0ms local hit)
+   * Download / Stream a file from Telegram Saved Messages with multi-part chunk reconstruction and local cache
    */
   async getFileStream(fileRecord) {
     const safeName = (fileRecord.name || fileRecord.original_name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
-    const cacheKey = fileRecord.file_hash || fileRecord.telegram_msg_id || fileRecord.id;
+    const cacheKey = fileRecord.telegram_msg_id || fileRecord.id;
     const cacheFilePath = path.join(CACHE_DIR, `${fileRecord.id}_${cacheKey}_${safeName}`);
 
     // 0. High-Speed Local Cache Hit (0ms - Instant disk stream)
     if (fs.existsSync(cacheFilePath)) {
       try {
         const stat = fs.statSync(cacheFilePath);
-        if (stat.size > 0) {
+        if (stat.size > 0 && (!fileRecord.size || stat.size === fileRecord.size)) {
           return {
             type: 'stream',
             stream: fs.createReadStream(cacheFilePath),
@@ -590,8 +523,8 @@ class TelegramService {
       } catch (e) {}
     }
 
-    // 1. If local_path exists and is valid on disk
-    if (fileRecord.local_path && fs.existsSync(fileRecord.local_path)) {
+    // 1. If local_path exists and is valid on disk within safe directories
+    if (fileRecord.local_path && fs.existsSync(fileRecord.local_path) && isSafePath(fileRecord.local_path)) {
       try {
         const stat = fs.statSync(fileRecord.local_path);
         if (stat.size > 0) {
@@ -606,69 +539,74 @@ class TelegramService {
       } catch (e) {}
     }
 
-    // 2. Telegram Bot / Channel Download with Fast Async Cache Write
-    if (fileRecord.file_hash) {
-      const botToken = await this.getBotToken();
+    // 2. Telegram Saved Messages (MTProto) Download & Chunk Assembly
+    const chunkIds = Array.isArray(fileRecord.telegram_chunk_ids) && fileRecord.telegram_chunk_ids.length > 0
+      ? fileRecord.telegram_chunk_ids
+      : (fileRecord.telegram_msg_id ? [fileRecord.telegram_msg_id] : []);
+
+    if (fileRecord.storage_type === 'telegram' && this.client && chunkIds.length > 0) {
       try {
-        const fileInfoRes = await fetch(
-          `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileRecord.file_hash}`
-        );
-        const fileInfo = await fileInfoRes.json();
-        if (fileInfo.ok && fileInfo.result.file_path) {
-          const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${fileInfo.result.file_path}`;
-          const fileRes = await fetch(downloadUrl);
-          const arrayBuffer = await fileRes.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
+        // Multi-Part Chunk Reassembly
+        if (chunkIds.length > 1) {
+          console.log(`[Telegram Saved Messages] Reassembling ${chunkIds.length} chunks for ${fileRecord.name}...`);
+          const writeStream = fs.createWriteStream(cacheFilePath);
 
-          // Asynchronously persist to fast local cache for instant future loads
-          fs.writeFile(cacheFilePath, buffer, (err) => {
-            if (err) console.error('[Cache] Failed to write cache:', err.message);
-          });
+          for (let i = 0; i < chunkIds.length; i++) {
+            const chunkMsgId = chunkIds[i];
+            const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
+              ids: [chunkMsgId],
+            });
+            if (messages && messages.length > 0 && messages[0].media) {
+              const chunkBuf = await this.client.downloadMedia(messages[0].media, { workers: 8 });
+              if (chunkBuf) {
+                await new Promise((resolve) => writeStream.write(chunkBuf, resolve));
+              }
+            }
+          }
+          writeStream.end();
+          await new Promise((resolve) => writeStream.on('finish', resolve));
 
+          const stat = fs.statSync(cacheFilePath);
           return {
-            type: 'buffer',
-            buffer,
-            size: buffer.length,
+            type: 'stream',
+            stream: fs.createReadStream(cacheFilePath),
+            size: stat.size,
             mimeType: fileRecord.mime_type,
             localPath: cacheFilePath,
           };
+        } else {
+          // Single Document Download
+          const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
+            ids: [chunkIds[0]],
+          });
+
+          if (messages && messages.length > 0 && messages[0].media) {
+            const buffer = await this.client.downloadMedia(messages[0].media, {
+              workers: 8,
+            });
+
+            if (buffer) {
+              // Asynchronously persist to fast local cache
+              fs.writeFile(cacheFilePath, buffer, (err) => {
+                if (err) console.error('[Cache] Failed to write cache:', err.message);
+              });
+
+              return {
+                type: 'buffer',
+                buffer,
+                size: buffer.length,
+                mimeType: fileRecord.mime_type,
+                localPath: cacheFilePath,
+              };
+            }
+          }
         }
       } catch (err) {
-        console.error('[Telegram] Bot getFile download error:', err.message);
+        console.error('[Telegram Saved Messages] MTProto download error:', err.message);
       }
     }
 
-    // 3. Telegram Saved Messages (MTProto) with Fast Async Cache Write
-    if (fileRecord.storage_type === 'telegram' && this.client && fileRecord.telegram_msg_id) {
-      try {
-        const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
-          ids: [fileRecord.telegram_msg_id],
-        });
-
-        if (messages && messages.length > 0 && messages[0].media) {
-          const buffer = await this.client.downloadMedia(messages[0].media, {
-            workers: 8,
-          });
-
-          // Asynchronously persist to fast local cache
-          fs.writeFile(cacheFilePath, buffer, (err) => {
-            if (err) console.error('[Cache] Failed to write cache:', err.message);
-          });
-
-          return {
-            type: 'buffer',
-            buffer,
-            size: buffer.length,
-            mimeType: fileRecord.mime_type,
-            localPath: cacheFilePath,
-          };
-        }
-      } catch (err) {
-        console.error('[Telegram] MTProto download error:', err.message);
-      }
-    }
-
-    // 4. Fallback file in UPLOADS_DIR
+    // 3. Fallback file in UPLOADS_DIR
     const fallbackPath = path.join(UPLOADS_DIR, `${fileRecord.id}_${fileRecord.original_name}`);
     if (fs.existsSync(fallbackPath)) {
       return {
@@ -680,35 +618,75 @@ class TelegramService {
       };
     }
 
-    throw new Error('File could not be downloaded from Telegram or local cache.');
+    throw new Error('File could not be downloaded from Telegram Saved Messages or local cache.');
   }
 
   /**
-   * Delete message from Telegram
+   * Delete message or array of chunk messages from Telegram Saved Messages
    */
-  async deleteTelegramMessage(telegramMsgId, telegramChatId) {
-    if (!telegramMsgId) return;
+  async deleteTelegramMessage(msgIdsOrRecord, telegramChatId = 'me') {
+    if (!msgIdsOrRecord) return;
 
-    if (this.authType === 'saved_messages' && this.client) {
+    let ids = [];
+    if (Array.isArray(msgIdsOrRecord)) {
+      ids = msgIdsOrRecord;
+    } else if (typeof msgIdsOrRecord === 'object' && msgIdsOrRecord !== null) {
+      if (Array.isArray(msgIdsOrRecord.telegram_chunk_ids) && msgIdsOrRecord.telegram_chunk_ids.length > 0) {
+        ids = msgIdsOrRecord.telegram_chunk_ids;
+      } else if (msgIdsOrRecord.telegram_msg_id) {
+        ids = [msgIdsOrRecord.telegram_msg_id];
+      }
+    } else {
+      ids = [msgIdsOrRecord];
+    }
+
+    if (this.client && ids.length > 0) {
       try {
-        await this.client.deleteMessages(telegramChatId || 'me', [telegramMsgId], {
+        await this.client.deleteMessages(telegramChatId || 'me', ids, {
           revoke: true,
         });
-      } catch (err) {}
-    } else {
-      const botToken = await this.getBotToken();
-      if (botToken && telegramChatId) {
-        try {
-          await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: telegramChatId,
-              message_id: telegramMsgId,
-            }),
-          });
-        } catch (e) {}
+        console.log(`[Telegram Saved Messages] Deleted ${ids.length} message(s) from Saved Messages`);
+      } catch (err) {
+        console.warn('[Telegram Saved Messages] Delete message notice:', err.message);
       }
+    }
+  }
+
+  /**
+   * Backup the database JSON directly into Telegram Saved Messages
+   */
+  async backupDatabaseToSavedMessages() {
+    if (!this.client) {
+      return { success: false, error: 'Telegram MTProto client is not connected' };
+    }
+
+    const dbPath = path.join(DATA_DIR, 'telecloud_db.json');
+    if (!fs.existsSync(dbPath)) {
+      return { success: false, error: 'Database JSON file not found on disk' };
+    }
+
+    try {
+      const fileContent = fs.readFileSync(dbPath);
+      const customFile = new CustomFile(
+        `telecloud_db_backup_${Date.now()}.json`,
+        fileContent.length,
+        dbPath,
+        fileContent
+      );
+
+      const result = await this.client.sendFile('me', {
+        file: customFile,
+        caption: `📦 Hightech Claude DB Backup - ${new Date().toISOString()}`,
+        forceDocument: true,
+      });
+
+      return {
+        success: true,
+        messageId: result.id,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err) {
+      return { success: false, error: err.message };
     }
   }
 }

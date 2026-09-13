@@ -15,9 +15,6 @@ async function requireApiKey(req, res, next) {
       }
     }
 
-    if (!rawKey && req.query) {
-      rawKey = req.query.api_key || req.query.key;
-    }
 
     if (!rawKey) {
       return res.status(401).json({

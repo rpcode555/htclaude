@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { CloudUpload } from 'lucide-react';
 import { api } from './api';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -11,6 +12,8 @@ import UploadModal from './components/UploadModal';
 import FolderModal from './components/FolderModal';
 import MoveModal from './components/MoveModal';
 import RenameModal from './components/RenameModal';
+import CreateFileModal from './components/CreateFileModal';
+import SharedFileView from './components/SharedFileView';
 import AdminPanel from './components/AdminPanel';
 import DeveloperSection from './components/DeveloperSection';
 import AuthGate from './components/AuthGate';
@@ -61,14 +64,32 @@ function MainApp() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
+  const [isCreateFileModalOpen, setIsCreateFileModalOpen] = useState(false);
+  const [toast, setToast] = useState({ message: '', visible: false });
 
   // Upload States
   const [uploadQueue, setUploadQueue] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
 
   const fileInputRef = useRef(null);
+
+  // Global window dragover / drop interception to prevent browser navigation when dropping non-image/non-pdf files
+  useEffect(() => {
+    const preventWindowDrop = (e) => {
+      e.preventDefault();
+    };
+
+    window.addEventListener('dragover', preventWindowDrop, false);
+    window.addEventListener('drop', preventWindowDrop, false);
+
+    return () => {
+      window.removeEventListener('dragover', preventWindowDrop, false);
+      window.removeEventListener('drop', preventWindowDrop, false);
+    };
+  }, []);
 
   // Debounced search term for high-speed responsiveness
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -226,25 +247,44 @@ function MainApp() {
     }
   };
 
-  // Drag & Drop Listeners
+  // Drag & Drop Listeners (Counter-based to prevent flicker on child element transitions)
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current += 1;
+    if (e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragOver(true);
+    }
+  };
+
   const handleDragOver = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(true);
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    if (!isDragOver) {
+      setIsDragOver(true);
+    }
   };
 
   const handleDragLeave = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0;
+      setIsDragOver(false);
+    }
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    dragCounter.current = 0;
     setIsDragOver(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleUploadFiles(e.dataTransfer.files);
     }
   };
@@ -432,6 +472,22 @@ function MainApp() {
     }
   };
 
+  const handleCopyShareLink = async (file) => {
+    const shareUrl = `${window.location.origin}/share/${file.id}`;
+    navigator.clipboard.writeText(shareUrl);
+    try {
+      if (!file.is_shared) {
+        await api.updateFile(file.id, { is_shared: 1 });
+        file.is_shared = 1;
+      }
+    } catch (e) {}
+    setToast({
+      message: `🔗 View-only link for "${file.name}" copied to clipboard!`,
+      visible: true,
+    });
+    setTimeout(() => setToast({ message: '', visible: false }), 3500);
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen w-screen bg-gray-50 flex flex-col items-center justify-center space-y-4 select-none">
@@ -451,6 +507,7 @@ function MainApp() {
 
   return (
     <div
+      onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -494,6 +551,10 @@ function MainApp() {
           setIsFolderModalOpen(true);
           setIsMobileSidebarOpen(false);
         }}
+        onNewFileClick={() => {
+          setIsCreateFileModalOpen(true);
+          setIsMobileSidebarOpen(false);
+        }}
         onOpenAdminPanel={() => {
           setCurrentView('admin');
           setIsMobileSidebarOpen(false);
@@ -523,6 +584,7 @@ function MainApp() {
           setSortOrder={setSortOrder}
           onUploadClick={() => fileInputRef.current?.click()}
           onNewFolderClick={() => setIsFolderModalOpen(true)}
+          onNewFileClick={() => setIsCreateFileModalOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenAdminPanel={() => setCurrentView('admin')}
           isAdminActive={currentView === 'admin'}
@@ -572,6 +634,8 @@ function MainApp() {
             onDeleteFolderPermanent={handleDeleteFolderPermanent}
             onEmptyTrash={handleEmptyTrash}
             onUploadTrigger={() => fileInputRef.current?.click()}
+            onNewFileClick={() => setIsCreateFileModalOpen(true)}
+            onShareFile={handleCopyShareLink}
             isDragOver={isDragOver}
           />
         )}
@@ -583,6 +647,11 @@ function MainApp() {
           file={previewFile}
           onClose={() => setPreviewFile(null)}
           onDownload={handleDownloadFile}
+          onFileUpdated={async (updatedFile) => {
+            setFiles((prev) => prev.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
+            setPreviewFile(updatedFile);
+            await Promise.all([loadFiles(true), loadData()]);
+          }}
           onTrash={async (file) => {
             const ok = await confirm({
               title: 'Move to Recycle Bin',
@@ -634,6 +703,32 @@ function MainApp() {
         />
       )}
 
+      {isCreateFileModalOpen && (
+        <CreateFileModal
+          isOpen={isCreateFileModalOpen}
+          onClose={() => setIsCreateFileModalOpen(false)}
+          folderId={currentFolderId}
+          folderName={folders.find((f) => f.id === currentFolderId)?.name || 'Root Directory'}
+          onFileCreated={async (newFile) => {
+            setFiles((prev) => [newFile, ...prev]);
+            await Promise.all([loadFiles(true), loadData()]);
+            setToast({
+              message: `✅ File "${newFile.name}" created in Telegram cloud!`,
+              visible: true,
+            });
+            setTimeout(() => setToast({ message: '', visible: false }), 3500);
+          }}
+        />
+      )}
+
+      {/* Floating Toast Notification */}
+      {toast.visible && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl bg-gray-900/95 dark:bg-black/95 text-white text-xs font-semibold shadow-2xl border border-gray-700/80 backdrop-blur-xl animate-fade-in select-none">
+          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" />
+          <span>{toast.message}</span>
+        </div>
+      )}
+
       {/* Floating Upload Queue Notification */}
       <UploadModal
         uploadQueue={uploadQueue}
@@ -641,6 +736,30 @@ function MainApp() {
         uploadProgress={uploadProgress}
         onDismiss={() => setUploadQueue([])}
       />
+
+      {/* ── Full-Screen Drag & Drop Backdrop Overlay ── */}
+      {isDragOver && (
+        <div
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-950/75 dark:bg-black/85 backdrop-blur-md border-4 border-dashed border-rose-500 rounded-3xl m-4 pointer-events-auto transition-all animate-fade-in select-none shadow-2xl"
+        >
+          <div className="w-20 h-20 rounded-3xl bg-rose-500/20 border border-rose-400/40 flex items-center justify-center mb-5 shadow-2xl shadow-rose-500/30 animate-bounce">
+            <CloudUpload className="w-10 h-10 text-rose-400" />
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight drop-shadow-md">
+            Drop files to upload
+          </h2>
+          <p className="text-sm sm:text-base text-rose-200 font-medium mt-2 max-w-md text-center px-4">
+            Upload images, documents, archives, videos, or any other files directly to your secure cloud
+          </p>
+          <div className="mt-4 px-4 py-1.5 rounded-full bg-rose-500/30 border border-rose-400/30 text-rose-200 text-xs font-mono font-semibold">
+            {currentFolderId ? `Target: ${folders.find((f) => f.id === currentFolderId)?.name || 'Selected Folder'}` : 'Target: Root Directory'}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -702,6 +821,22 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
+  const isShareView =
+    window.location.pathname.startsWith('/share/') ||
+    window.location.pathname.startsWith('/view/') ||
+    new URLSearchParams(window.location.search).has('share') ||
+    new URLSearchParams(window.location.search).has('v');
+
+  if (isShareView) {
+    return (
+      <ErrorBoundary>
+        <ThemeProvider>
+          <SharedFileView />
+        </ThemeProvider>
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <ErrorBoundary>
       <ThemeProvider>

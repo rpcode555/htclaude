@@ -10,6 +10,7 @@ import {
   FileText,
   Archive,
   Plus,
+  FilePlus,
   ChevronRight,
   ChevronLeft,
   Folder,
@@ -40,6 +41,7 @@ export default function Sidebar({
   onUploadClick,
   onOpenSettings,
   onNewFolderClick,
+  onNewFileClick,
   onOpenAdminPanel,
   onOpenDeveloperSection,
   onRefreshData,
@@ -178,14 +180,21 @@ export default function Sidebar({
                 </div>
               </button>
 
-              {/* Upload Button */}
-              <div className="mt-3.5">
+              {/* Action Buttons */}
+              <div className="mt-3.5 space-y-2">
                 <button
                   onClick={() => { onUploadClick?.(); onCloseMobile?.(); }}
-                  className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold cursor-pointer"
+                  className="btn-primary w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold cursor-pointer shadow-sm"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Upload Files</span>
+                </button>
+                <button
+                  onClick={() => { onNewFileClick?.(); onCloseMobile?.(); }}
+                  className="btn-secondary w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl text-xs font-bold cursor-pointer dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <FilePlus className="w-3.5 h-3.5 text-rose-500" />
+                  <span>New Note / File</span>
                 </button>
               </div>
 
@@ -203,7 +212,7 @@ export default function Sidebar({
             </div>
           ) : (
             /* Collapsed Brand Icon & Upload Icon */
-            <div className="mt-3 flex flex-col items-center gap-3">
+            <div className="mt-3 flex flex-col items-center gap-2.5">
               <button
                 onClick={handleLogoClick}
                 className="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-600 to-red-500 flex items-center justify-center shadow-md shadow-rose-600/30 cursor-pointer"
@@ -217,6 +226,13 @@ export default function Sidebar({
                 title="Upload Files"
               >
                 <Plus className="w-5 h-5 text-white" />
+              </button>
+              <button
+                onClick={onNewFileClick}
+                className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center cursor-pointer text-rose-500 hover:bg-gray-200 dark:hover:bg-gray-700 shadow-xs"
+                title="Create New File / Note"
+              >
+                <FilePlus className="w-4 h-4" />
               </button>
             </div>
           )}
@@ -332,13 +348,22 @@ export default function Sidebar({
             <div>
               <div className="flex items-center justify-between px-2.5 mb-1.5">
                 <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Folders</p>
-                <button
-                  onClick={onNewFolderClick}
-                  title="New folder"
-                  className="p-1 rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={onNewFileClick}
+                    title="Create file in current folder"
+                    className="p-1 rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                  >
+                    <FilePlus className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={onNewFolderClick}
+                    title="New folder"
+                    className="p-1 rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
               <div className="space-y-0.5">
                 {(() => {

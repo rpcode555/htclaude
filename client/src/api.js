@@ -84,12 +84,21 @@ export const api = {
     return await res.json();
   },
 
-  async connectBot(botToken, chatId) {
+  async connectSessionString(apiId, apiHash, sessionString) {
     const headers = await getAuthHeader();
-    const res = await fetch(`${API_BASE}/auth/bot-connect`, {
+    const res = await fetch(`${API_BASE}/auth/session-connect`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ botToken, chatId }),
+      body: JSON.stringify({ apiId, apiHash, sessionString }),
+    });
+    return await res.json();
+  },
+
+  async backupDatabase() {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/auth/backup-db`, {
+      method: 'POST',
+      headers,
     });
     return await res.json();
   },
@@ -179,9 +188,42 @@ export const api = {
     return await res.json();
   },
 
+  async createNoteFile({ name, content, folder_id }) {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/files/create`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content, folder_id }),
+    });
+    return await res.json();
+  },
+
+  async updateFileContent(id, content) {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/files/${id}/content`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    return await res.json();
+  },
+
+  async getSharedFileInfo(id) {
+    const res = await fetch(`${API_BASE}/v1/share/${id}`);
+    return await res.json();
+  },
+
   async uploadSingleFile(file, folder_id, onProgress) {
-    const user = auth.currentUser;
-    const token = user ? await user.getIdToken() : '';
+    let token = '';
+    try {
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      } else {
+        token = localStorage.getItem('admin_token') || '';
+      }
+    } catch (e) {
+      token = localStorage.getItem('admin_token') || '';
+    }
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -190,6 +232,8 @@ export const api = {
       if (folder_id) {
         formData.append('folder_id', folder_id);
       }
+
+      xhr.timeout = 0; // 0 = No timeout for unlimited multi-GB file uploads
 
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable && onProgress) {
@@ -214,13 +258,20 @@ export const api = {
             const errJson = JSON.parse(xhr.responseText);
             reject(new Error(errJson.error || `Upload failed with status ${xhr.status}`));
           } catch (e) {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
+            reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.statusText || 'Server error'}`));
           }
         }
       });
 
-      xhr.addEventListener('error', () => reject(new Error('Network error during file upload')));
-      xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+      xhr.addEventListener('error', () => {
+        reject(new Error('Connection interrupted or network error during upload. Please check your connection and server status.'));
+      });
+      xhr.addEventListener('timeout', () => {
+        reject(new Error('Upload timed out. The file might be too large or the connection is too slow.'));
+      });
+      xhr.addEventListener('abort', () => {
+        reject(new Error('Upload was aborted.'));
+      });
 
       xhr.open('POST', `${API_BASE}/files/upload`);
       if (token) {

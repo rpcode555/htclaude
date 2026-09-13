@@ -21,6 +21,8 @@ import {
   Home,
   CloudUpload,
   Plus,
+  FilePlus,
+  Share2,
   Upload,
   AlertTriangle,
 } from 'lucide-react';
@@ -77,6 +79,8 @@ export default function FileExplorer({
   onDeleteFolderPermanent,
   onEmptyTrash,
   onUploadTrigger,
+  onNewFileClick,
+  onShareFile,
   isDragOver,
 }) {
   const safeFiles         = Array.isArray(files)         ? files         : [];
@@ -129,18 +133,6 @@ export default function FileExplorer({
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto relative p-4 sm:p-6 space-y-5 select-none animate-fade-in">
-
-      {/* ── Drag & Drop Overlay ── */}
-      {isDragOver && (
-        <div className="drag-overlay">
-          <div className="w-16 h-16 rounded-2xl bg-rose-50 dark:bg-rose-950/60 border-2 border-rose-300 dark:border-rose-700 flex items-center justify-center mb-4 shadow-lg">
-            <CloudUpload className="w-8 h-8 text-rose-600 dark:text-rose-400" />
-          </div>
-          <h2 className="text-xl font-bold text-rose-700 dark:text-rose-300">Drop files to upload</h2>
-          <p className="text-sm text-rose-500 font-medium mt-1">Files will be stored permanently in your secure cloud</p>
-        </div>
-      )}
-
       {/* ── Breadcrumb Bar ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Breadcrumbs */}
@@ -186,6 +178,17 @@ export default function FileExplorer({
 
         {/* Actions */}
         <div className="flex items-center gap-2">
+          {currentView !== 'trash' && (
+            <button
+              onClick={onNewFileClick}
+              className="btn-secondary flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer dark:bg-slate-900 dark:border-slate-800 dark:text-slate-200"
+              title="Create note or file"
+            >
+              <FilePlus className="w-3.5 h-3.5 text-rose-500" />
+              <span>New File</span>
+            </button>
+          )}
+
           {currentFolderId && currentView !== 'trash' && (
             <button
               onClick={onUploadTrigger}
@@ -416,12 +419,21 @@ export default function FileExplorer({
                 : 'Drag & drop files anywhere, or click Upload to store directly to your secure cloud.'}
             </p>
             {currentView !== 'trash' && (
-              <button
-                onClick={onUploadTrigger}
-                className="btn-primary px-5 py-2.5 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Upload Files Now
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={onUploadTrigger}
+                  className="btn-primary px-5 py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-sm"
+                >
+                  Upload Files Now
+                </button>
+                <button
+                  onClick={onNewFileClick}
+                  className="btn-secondary px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer flex items-center gap-1.5 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-200 shadow-sm"
+                >
+                  <FilePlus className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Create Note / File</span>
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -503,6 +515,9 @@ export default function FileExplorer({
                   <div className="absolute inset-x-2 bottom-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-1 shadow-lg opacity-0 group-hover:opacity-100 transition-all flex items-center justify-around">
                     <button onClick={e => { e.stopPropagation(); onFileClick(file); }} className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Preview">
                       <Eye className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); onShareFile?.(file); }} className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Copy Read-Only Share Link">
+                      <Share2 className="w-3.5 h-3.5" />
                     </button>
                     <button onClick={e => { e.stopPropagation(); onDownloadFile(file); }} className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Download">
                       <Download className="w-3.5 h-3.5" />
@@ -590,6 +605,7 @@ export default function FileExplorer({
                         <td>
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button onClick={e => { e.stopPropagation(); onFileClick(file); }} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Preview"><Eye className="w-4 h-4" /></button>
+                            <button onClick={e => { e.stopPropagation(); onShareFile?.(file); }} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Copy Read-Only Share Link"><Share2 className="w-4 h-4" /></button>
                             <button onClick={e => { e.stopPropagation(); onDownloadFile(file); }} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Download"><Download className="w-4 h-4" /></button>
                             <button onClick={e => { e.stopPropagation(); onRenameFile(file); }} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Rename"><Edit2 className="w-4 h-4" /></button>
                             {currentView === 'trash' ? (

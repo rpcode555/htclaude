@@ -5,10 +5,34 @@ const { db, detectCategory } = require('../db');
 const telegramService = require('../services/telegramService');
 
 const { UPLOADS_DIR, isSafePath } = require('../config/paths');
+const { verifyAdminToken } = require('../middleware/authMiddleware');
 
 function sanitizeFileName(name) {
   if (!name) return 'image_' + Date.now();
   return name.replace(/[\/\?<>\\:\*\|":]/g, '_').replace(/\.\./g, '_').trim();
+}
+
+function validateMagicBytes(filePath, originalName) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return true;
+    const fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(8);
+    fs.readSync(fd, buffer, 0, 8, 0);
+    fs.closeSync(fd);
+
+    const isMZ = buffer[0] === 0x4d && buffer[1] === 0x5a;
+    const isELF = buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46;
+
+    const ext = path.extname(originalName).toLowerCase();
+    const safeMediaExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4', '.mp3', '.pdf', '.txt', '.json'];
+
+    if (safeMediaExts.includes(ext) && (isMZ || isELF)) {
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return true;
+  }
 }
 
 function getBaseUrl(req) {
@@ -147,10 +171,16 @@ exports.uploadViaApiKey = async (req, res) => {
     for (const file of rawFiles) {
       const rawName = Buffer.from(file.originalname, 'latin1').toString('utf8');
       const originalName = sanitizeFileName(rawName);
+
+      if (!validateMagicBytes(file.path, originalName)) {
+        console.warn(`[Security Alert] Rejected API upload with mismatched executable signature: ${originalName}`);
+        continue;
+      }
+
       const mimeType = file.mimetype || mime.lookup(originalName) || 'application/octet-stream';
       const category = detectCategory(mimeType, originalName);
 
-      // Upload directly to Telegram Storage Channel
+      // Upload directly to Telegram Saved Messages
       const uploadResult = await telegramService.uploadFile({
         originalName,
         buffer: file.buffer,
@@ -168,6 +198,9 @@ exports.uploadViaApiKey = async (req, res) => {
         size: file.size,
         category,
         telegram_msg_id: uploadResult.telegramMsgId,
+        telegram_chunk_ids: uploadResult.telegramChunkIds || null,
+        is_chunked: uploadResult.isChunked || false,
+        total_parts: uploadResult.totalParts || 1,
         telegram_chat_id: uploadResult.telegramChatId,
         file_hash: uploadResult.fileHash || uploadResult.file_hash || null,
         storage_type: uploadResult.storageType,
@@ -177,8 +210,8 @@ exports.uploadViaApiKey = async (req, res) => {
         is_starred: 0,
       });
 
-      // Clean up temporary disk file if stored on Telegram
-      if (file.path && fs.existsSync(file.path) && uploadResult.storageType === 'telegram') {
+      // Clean up temporary disk file
+      if (file.path && fs.existsSync(file.path)) {
         try {
           fs.unlinkSync(file.path);
         } catch (e) {}
@@ -242,6 +275,35 @@ exports.serveRawFile = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Image / file not found.' });
     }
 
+    // Verify access: Admin auth, OR developer upload (api_key_id), OR explicitly shared
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    let token = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else if (req.query && req.query.token) {
+      token = req.query.token;
+    }
+
+    let isAuthorized = false;
+    if (token) {
+      const verified = await verifyAdminToken(token);
+      if (verified) isAuthorized = true;
+    }
+
+    const isPublicAsset = !!file.api_key_id;
+    const isShared = (file.is_shared === 1 || file.is_shared === true) && !file.is_trash;
+
+    if (!isAuthorized && !isPublicAsset && !isShared) {
+      return res.status(403).json({ success: false, error: 'Unauthorized: Private file is not shared.' });
+    }
+
+    // XSS Protection for executable MIME types (HTML, XHTML, SVG)
+    const isExecutableMime = ['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(file.mime_type);
+    const cspHeader = "sandbox allow-scripts allow-forms; default-src 'self' data:; style-src 'self' 'unsafe-inline'";
+    if (isExecutableMime) {
+      res.setHeader('Content-Security-Policy', cspHeader);
+    }
+
     const streamData = await telegramService.getFileStream(file);
 
     // Global Public CORS & High-Performance Caching
@@ -268,14 +330,17 @@ exports.serveRawFile = async (req, res) => {
         const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
         const chunksize = end - start + 1;
 
-        res.writeHead(206, {
+        const headers = {
           'Content-Range': `bytes ${start}-${end}/${fileSize}`,
           'Accept-Ranges': 'bytes',
           'Content-Length': chunksize,
           'Content-Type': file.mime_type || 'application/octet-stream',
           'Cache-Control': 'public, max-age=31536000, immutable',
           'Access-Control-Allow-Origin': '*',
-        });
+        };
+        if (isExecutableMime) headers['Content-Security-Policy'] = cspHeader;
+
+        res.writeHead(206, headers);
         fs.createReadStream(streamData.localPath, { start, end }).pipe(res);
         return;
       }
@@ -300,6 +365,27 @@ exports.downloadRawFile = async (req, res) => {
 
     if (!file) {
       return res.status(404).json({ success: false, error: 'File not found.' });
+    }
+
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    let token = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else if (req.query && req.query.token) {
+      token = req.query.token;
+    }
+
+    let isAuthorized = false;
+    if (token) {
+      const verified = await verifyAdminToken(token);
+      if (verified) isAuthorized = true;
+    }
+
+    const isPublicAsset = !!file.api_key_id;
+    const isShared = (file.is_shared === 1 || file.is_shared === true) && !file.is_trash;
+
+    if (!isAuthorized && !isPublicAsset && !isShared) {
+      return res.status(403).json({ success: false, error: 'Unauthorized: Private file is not shared.' });
     }
 
     const streamData = await telegramService.getFileStream(file);

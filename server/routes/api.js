@@ -34,9 +34,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: {
-    fileSize: 2000 * 1024 * 1024, // 2GB limit per file (Telegram standard)
-  },
+  // Unlimited file size: files of any size are accepted and streamed to disk
 });
 
 // Disable HTTP response caching on dynamic API queries
@@ -57,7 +55,6 @@ router.get('/config/firebase', (req, res) => {
     messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
     appId: process.env.FIREBASE_APP_ID || '',
     measurementId: process.env.FIREBASE_MEASUREMENT_ID || '',
-    adminEmail: process.env.ADMIN_EMAIL || '',
   });
 });
 
@@ -78,6 +75,7 @@ router.post(
 router.get('/v1/raw/:id', developerController.serveRawFile);
 router.get('/v1/image/:id', developerController.serveRawFile);
 router.get('/v1/download/:id', developerController.downloadRawFile);
+router.get('/v1/share/:id', fileController.getSharedFileInfo);
 
 // =========================================================================
 // DEVELOPER API KEYS MANAGEMENT (Protected by Firebase Admin Authentication)
@@ -91,10 +89,12 @@ router.delete('/developer/keys/:id', requireAdminAuth, developerController.delet
 // =========================================================================
 // CORE APP PROTECTED ROUTES (Protected by Firebase Admin Authentication)
 // =========================================================================
+router.get('/auth/me', requireAdminAuth, authController.getMe);
 router.get('/auth/status', requireAdminAuth, authController.getStatus);
 router.post('/auth/send-code', authLimiter, requireAdminAuth, authController.sendCode);
 router.post('/auth/verify-code', authLimiter, requireAdminAuth, authController.verifyCode);
-router.post('/auth/bot-connect', authLimiter, requireAdminAuth, authController.botConnect);
+router.post('/auth/session-connect', authLimiter, requireAdminAuth, authController.connectSessionString);
+router.post('/auth/backup-db', requireAdminAuth, authController.backupDatabase);
 router.post('/auth/disconnect', requireAdminAuth, authController.disconnect);
 router.post('/auth/settings', requireAdminAuth, authController.updateSettings);
 
@@ -109,6 +109,8 @@ router.post('/folders/:id/restore', requireAdminAuth, folderController.restoreFo
 router.get('/files', requireAdminAuth, fileController.listFiles);
 router.get('/files/:id', requireAdminAuth, fileController.getFile);
 router.post('/files/upload', uploadLimiter, requireAdminAuth, upload.any(), fileController.uploadFiles);
+router.post('/files/create', requireAdminAuth, fileController.createNoteFile);
+router.put('/files/:id/content', requireAdminAuth, fileController.updateFileContent);
 router.get('/files/:id/download', requireAdminAuth, fileController.downloadFile);
 router.get('/files/:id/stream', fileController.streamFile);
 router.patch('/files/:id', requireAdminAuth, fileController.updateFile);

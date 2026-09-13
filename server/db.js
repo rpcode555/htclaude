@@ -17,14 +17,13 @@ try {
 
 const defaultData = {
   settings: {
-    auth_type: process.env.TELEGRAM_AUTH_TYPE || 'bot',
-    api_id: '',
-    api_hash: '',
-    session_string: '',
+    auth_type: process.env.TELEGRAM_AUTH_TYPE || 'saved_messages',
+    api_id: process.env.TELEGRAM_API_ID || '',
+    api_hash: process.env.TELEGRAM_API_HASH || '',
+    session_string: process.env.TELEGRAM_SESSION_STRING || '',
     phone_number: '',
     phone_code_hash: '',
-    bot_token: process.env.TELEGRAM_BOT_TOKEN || '8805033967:AAF2g0Uq8lNGxym31SDqL_gO-FrBAfETNv0',
-    chat_id: process.env.TELEGRAM_CHANNEL_ID || '-1002466857067',
+    chat_id: 'me',
     auto_backup: '0',
     storage_quota_gb: '10000', // Unlimited virtual
   },
@@ -81,16 +80,51 @@ class Database {
       const cloudData = await cloudDbService.fetchAll();
       if (cloudData) {
         if (Array.isArray(cloudData.files)) {
-          this.data.files = cloudData.files;
+          const localMap = new Map((this.data.files || []).map((f) => [f.id, f]));
+          for (const cloudFile of cloudData.files) {
+            const existing = localMap.get(cloudFile.id);
+            if (
+              !existing ||
+              new Date(cloudFile.updated_at || cloudFile.created_at || 0) >=
+                new Date(existing.updated_at || existing.created_at || 0)
+            ) {
+              localMap.set(cloudFile.id, { ...existing, ...cloudFile });
+            }
+          }
+          this.data.files = Array.from(localMap.values());
         }
         if (Array.isArray(cloudData.folders) && cloudData.folders.length > 0) {
-          this.data.folders = cloudData.folders;
+          const folderMap = new Map((this.data.folders || []).map((f) => [f.id, f]));
+          for (const cloudFolder of cloudData.folders) {
+            const existing = folderMap.get(cloudFolder.id);
+            if (
+              !existing ||
+              new Date(cloudFolder.updated_at || cloudFolder.created_at || 0) >=
+                new Date(existing.updated_at || existing.created_at || 0)
+            ) {
+              folderMap.set(cloudFolder.id, { ...existing, ...cloudFolder });
+            }
+          }
+          this.data.folders = Array.from(folderMap.values());
         }
         if (cloudData.settings && Object.keys(cloudData.settings).length > 0) {
-          this.data.settings = { ...this.data.settings, ...cloudData.settings };
+          // Never overwrite settings with sensitive remote values
+          const { session_string, bot_token, api_id, api_hash, ...safeSettings } = cloudData.settings;
+          this.data.settings = { ...this.data.settings, ...safeSettings };
         }
         if (Array.isArray(cloudData.api_keys)) {
-          this.data.api_keys = cloudData.api_keys;
+          const keyMap = new Map((this.data.api_keys || []).map((k) => [k.id, k]));
+          for (const cloudKey of cloudData.api_keys) {
+            const existing = keyMap.get(cloudKey.id);
+            if (
+              !existing ||
+              new Date(cloudKey.updated_at || cloudKey.created_at || 0) >=
+                new Date(existing.updated_at || existing.created_at || 0)
+            ) {
+              keyMap.set(cloudKey.id, { ...existing, ...cloudKey });
+            }
+          }
+          this.data.api_keys = Array.from(keyMap.values());
         }
         this.lastCloudSync = Date.now();
         this.saveData(this.data, true);
@@ -127,7 +161,18 @@ class Database {
 
     const performSave = () => {
       try {
-        const jsonContent = JSON.stringify(data, null, 2);
+        // Strip sensitive credentials so secrets are never written to disk
+        const sanitized = JSON.parse(JSON.stringify(data));
+        if (sanitized.settings) {
+          delete sanitized.settings.session_string;
+          delete sanitized.settings.bot_token;
+          delete sanitized.settings.api_id;
+          delete sanitized.settings.api_hash;
+          delete sanitized.settings.phone_number;
+          delete sanitized.settings.phone_code_hash;
+        }
+
+        const jsonContent = JSON.stringify(sanitized, null, 2);
         const tempPath = `${DB_FILE}.tmp`;
         fs.writeFileSync(tempPath, jsonContent, 'utf-8');
         fs.renameSync(tempPath, DB_FILE);
@@ -145,10 +190,16 @@ class Database {
 
   // --- Settings ---
   async getSetting(key) {
-    return this.data.settings[key] || null;
+    if (key === 'api_id') return process.env.TELEGRAM_API_ID || this.data.settings?.api_id || null;
+    if (key === 'api_hash') return process.env.TELEGRAM_API_HASH || this.data.settings?.api_hash || null;
+    if (key === 'session_string') return process.env.TELEGRAM_SESSION_STRING || this.data.settings?.session_string || null;
+    if (key === 'bot_token') return process.env.TELEGRAM_BOT_TOKEN || this.data.settings?.bot_token || null;
+    if (key === 'auth_type') return process.env.TELEGRAM_AUTH_TYPE || this.data.settings?.auth_type || 'saved_messages';
+    return this.data.settings?.[key] || null;
   }
 
   async setSetting(key, value) {
+    if (!this.data.settings) this.data.settings = {};
     this.data.settings[key] = value;
     this.saveData(this.data, true);
     cloudDbService.saveSettings(this.data.settings).catch(() => {});
@@ -159,7 +210,14 @@ class Database {
     if (!this.data.settings || Date.now() - this.lastCloudSync > 60000) {
       await this.syncFromCloud();
     }
-    return { ...this.data.settings };
+    return {
+      ...this.data.settings,
+      auth_type: process.env.TELEGRAM_AUTH_TYPE || this.data.settings?.auth_type || 'saved_messages',
+      api_id: process.env.TELEGRAM_API_ID || this.data.settings?.api_id || '',
+      api_hash: process.env.TELEGRAM_API_HASH || this.data.settings?.api_hash || '',
+      session_string: process.env.TELEGRAM_SESSION_STRING || this.data.settings?.session_string || '',
+      bot_token: process.env.TELEGRAM_BOT_TOKEN || this.data.settings?.bot_token || '',
+    };
   }
 
   // --- Folders ---
@@ -340,6 +398,10 @@ class Database {
   async getFileById(id) {
     let found = (this.data.files || []).find((f) => f.id === id);
     if (!found) {
+      this.data = this.loadData();
+      found = (this.data.files || []).find((f) => f.id === id);
+    }
+    if (!found) {
       await this.syncFromCloud();
       found = (this.data.files || []).find((f) => f.id === id);
     }
@@ -360,6 +422,9 @@ class Database {
       size: file.size || 0,
       category: file.category || detectCategory(file.mime_type, file.name),
       telegram_msg_id: file.telegram_msg_id || null,
+      telegram_chunk_ids: file.telegram_chunk_ids || null,
+      is_chunked: file.is_chunked || false,
+      total_parts: file.total_parts || 1,
       telegram_chat_id: file.telegram_chat_id || null,
       file_hash: file.file_hash || null,
       storage_type: file.storage_type || 'telegram', // 'telegram' | 'local'
@@ -369,6 +434,7 @@ class Database {
       tags: file.tags || [],
       is_starred: file.is_starred || 0,
       is_trash: 0,
+      is_shared: file.is_shared ? 1 : 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -427,10 +493,25 @@ class Database {
 
   // --- API Keys Management ---
   async getApiKeys() {
-    if (!this.data.api_keys || this.data.api_keys.length === 0 || Date.now() - this.lastCloudSync > 5000) {
+    if (!this.data.api_keys || this.data.api_keys.length === 0 || Date.now() - this.lastCloudSync > 60000) {
       await this.syncFromCloud();
     }
-    return this.data.api_keys || [];
+    // Return keys safely with masked prefix (never expose plaintext key or raw hash)
+    return (this.data.api_keys || []).map((k) => ({
+      id: k.id,
+      name: k.name,
+      purpose: k.purpose,
+      validity: k.validity,
+      expires_at: k.expires_at,
+      folder_id: k.folder_id,
+      key: k.key_prefix || (k.key ? `${k.key.slice(0, 14)}••••••••` : '••••••••'),
+      key_prefix: k.key_prefix,
+      status: k.status,
+      total_uploads: k.total_uploads || 0,
+      last_used_at: k.last_used_at,
+      created_at: k.created_at,
+      updated_at: k.updated_at,
+    }));
   }
 
   async getApiKeyById(id) {
@@ -442,11 +523,40 @@ class Database {
     return found || null;
   }
 
-  async getApiKeyByKey(key) {
-    let found = (this.data.api_keys || []).find((k) => k.key === key);
+  async getApiKeyByKey(rawKey) {
+    if (!rawKey || typeof rawKey !== 'string') return null;
+    const cleanKey = rawKey.trim();
+    const providedHash = crypto.createHash('sha256').update(cleanKey).digest('hex');
+    const providedBuffer = Buffer.from(providedHash, 'utf-8');
+
+    const findMatch = () => {
+      return (this.data.api_keys || []).find((k) => {
+        if (k.key_hash) {
+          const storedBuffer = Buffer.from(k.key_hash, 'utf-8');
+          if (storedBuffer.length === providedBuffer.length && crypto.timingSafeEqual(storedBuffer, providedBuffer)) {
+            return true;
+          }
+        }
+        if (k.key) {
+          // Backward compatibility for existing plaintext keys with constant-time check
+          const legacyHash = crypto.createHash('sha256').update(k.key).digest('hex');
+          const legacyBuffer = Buffer.from(legacyHash, 'utf-8');
+          if (legacyBuffer.length === providedBuffer.length && crypto.timingSafeEqual(legacyBuffer, providedBuffer)) {
+            return true;
+          }
+        }
+        return false;
+      });
+    };
+
+    let found = findMatch();
+    if (!found) {
+      this.data = this.loadData();
+      found = findMatch();
+    }
     if (!found) {
       await this.syncFromCloud();
-      found = (this.data.api_keys || []).find((k) => k.key === key);
+      found = findMatch();
     }
     return found || null;
   }
@@ -454,6 +564,9 @@ class Database {
   async createApiKey({ name = 'My Website API Key', purpose = 'web', validity = 'never' } = {}) {
     if (!this.data.api_keys) this.data.api_keys = [];
     const rawRandom = crypto.randomBytes(24).toString('hex');
+    const secretKey = `htc_live_${rawRandom}`;
+    const keyHash = crypto.createHash('sha256').update(secretKey).digest('hex');
+    const keyPrefix = `htc_live_${rawRandom.substring(0, 6)}...${rawRandom.slice(-4)}`;
 
     let expires_at = null;
     if (validity === '30d') {
@@ -487,7 +600,8 @@ class Database {
       validity: validity || 'never',
       expires_at,
       folder_id: targetFolder ? targetFolder.id : null,
-      key: `htc_live_${rawRandom}`,
+      key_hash: keyHash,
+      key_prefix: keyPrefix,
       status: 'active', // 'active' | 'revoked'
       total_uploads: 0,
       last_used_at: null,
@@ -497,7 +611,12 @@ class Database {
     this.data.api_keys.push(newApiKey);
     this.saveData();
     await cloudDbService.saveApiKey(newApiKey);
-    return newApiKey;
+    // Return full key string ONLY on creation response so user can copy it once
+    return {
+      ...newApiKey,
+      key: secretKey,
+      secret_key: secretKey,
+    };
   }
 
   async getOrCreateApiKeyFolder(apiKey) {

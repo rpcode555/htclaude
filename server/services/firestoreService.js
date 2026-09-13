@@ -4,10 +4,12 @@
  * with local fallback support.
  */
 
-const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'melodic-keyword-374810';
-const API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
+const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || null;
+const API_KEY = process.env.FIREBASE_API_KEY || null;
 
-const BASE_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+const BASE_URL = PROJECT_ID
+  ? `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`
+  : null;
 
 /**
  * Convert JavaScript Object to Firestore REST Format

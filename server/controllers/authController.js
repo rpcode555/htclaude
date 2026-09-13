@@ -6,17 +6,13 @@ exports.getStatus = async (req, res) => {
     const status = await telegramService.getStatus();
     const settings = await getAllSettings();
 
-    const hasBotToken = !!(process.env.TELEGRAM_BOT_TOKEN || settings.bot_token);
-    const channelId = await telegramService.getChannelId();
-
     // Redact sensitive keys
     const safeSettings = {
       auth_type: status.authType,
       api_id: settings.api_id ? '******' + settings.api_id.slice(-3) : '',
       phone_number: settings.phone_number ? '******' + settings.phone_number.slice(-4) : '',
       has_session: !!(process.env.TELEGRAM_SESSION_STRING || settings.session_string),
-      has_bot_token: hasBotToken,
-      chat_id: channelId ? (channelId.length > 6 ? channelId.slice(0, 5) + '***' + channelId.slice(-3) : channelId) : 'me',
+      chat_id: 'me',
       auto_backup: settings.auto_backup || '1',
     };
 
@@ -63,18 +59,33 @@ exports.verifyCode = async (req, res) => {
   }
 };
 
-exports.botConnect = async (req, res) => {
+exports.connectSessionString = async (req, res) => {
   try {
-    const { botToken, chatId } = req.body;
-    if (!botToken) {
-      return res.status(400).json({ success: false, error: 'Bot Token is required.' });
+    const { apiId, apiHash, sessionString } = req.body;
+    if (!apiId || !apiHash || !sessionString) {
+      return res.status(400).json({
+        success: false,
+        error: 'API ID, API Hash, and Session String are all required.',
+      });
     }
 
-    const result = await telegramService.connectBot(botToken, chatId);
+    const result = await telegramService.connectSessionString(apiId, apiHash, sessionString);
     res.json(result);
   } catch (err) {
-    console.error('[Auth] botConnect error:', err);
-    res.status(400).json({ success: false, error: err.message || 'Failed to connect bot.' });
+    console.error('[Auth] connectSessionString error:', err);
+    res.status(400).json({ success: false, error: err.message || 'Failed to connect with session string.' });
+  }
+};
+
+exports.backupDatabase = async (req, res) => {
+  try {
+    const result = await telegramService.backupDatabaseToSavedMessages();
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
@@ -95,6 +106,21 @@ exports.updateSettings = async (req, res) => {
     if (auto_backup !== undefined) await setSetting('auto_backup', auto_backup);
 
     res.json({ success: true, message: 'Settings updated successfully.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.getMe = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      user: {
+        uid: req.user?.uid || req.user?.localId,
+        email: req.user?.email,
+        isAdmin: true,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

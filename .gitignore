@@ -23,6 +23,7 @@ temp_uploads/
 server/temp_uploads/
 server/uploads/cache/
 server/data/*.tmp
+server/data/*.json
 
 # IDE, Logs, OS
 .DS_Store
