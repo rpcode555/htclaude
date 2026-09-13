@@ -570,7 +570,7 @@ class TelegramService {
     }
 
     const stringSession = new StringSession(sessionString.trim());
-    const client = new TelegramClient(stringSession, cleanApiId, apiHash.trim(), {
+    const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
       connectionRetries: 5,
       useWSS: false,
     });
@@ -583,7 +583,7 @@ class TelegramService {
 
     await setSetting('manual_disconnect', false);
     await setSetting('api_id', cleanApiId.toString());
-    await setSetting('api_hash', apiHash.trim());
+    await setSetting('api_hash', cleanApiHash);
     await setSetting('session_string', sessionString.trim());
     await setSetting('auth_type', 'saved_messages');
     await setSetting('chat_id', 'me');
