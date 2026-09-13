@@ -20,6 +20,7 @@
     "firebase": "^12.18.0",
     "lucide-react": "^1.37.0",
     "motion": "^13.1.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.6.0"

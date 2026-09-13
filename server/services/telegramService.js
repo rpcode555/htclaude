@@ -5,6 +5,7 @@ const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 const { NewMessage } = require('telegram/events');
+const QRCode = require('qrcode');
 
 const { UPLOADS_DIR, CACHE_DIR, DATA_DIR, isSafePath } = require('../config/paths');
 
@@ -371,6 +372,13 @@ class TelegramService {
       }
     }
 
+    return await this._finalizeSessionLogin(client);
+  }
+
+  /**
+   * Finalize login and persist session for MTProto authentication (used by OTP and QR login)
+   */
+  async _finalizeSessionLogin(client) {
     const sessionString = client.session.save();
     await setSetting('manual_disconnect', false);
     await setSetting('session_string', sessionString);
@@ -390,6 +398,7 @@ class TelegramService {
 
     const me = await client.getMe();
     return {
+      status: 'success',
       success: true,
       user: {
         id: me.id.toString(),
@@ -399,6 +408,151 @@ class TelegramService {
         target: 'Saved Messages (me)',
       },
     };
+  }
+
+  /**
+   * Generate Telegram QR code for instant login via mobile Telegram app (Settings > Devices > Link Desktop)
+   */
+  async getQrCode(apiId = null, apiHash = null) {
+    const cleanApiId = parseInt(apiId || (await getSetting('api_id')));
+    const cleanApiHash = (apiHash || (await getSetting('api_hash')) || '').trim();
+
+    if (!cleanApiId || !cleanApiHash) {
+      throw new Error('Telegram API ID and API Hash are required.');
+    }
+
+    const stringSession = new StringSession('');
+    const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
+      connectionRetries: 5,
+      useWSS: false,
+    });
+
+    await client.connect();
+
+    const res = await client.invoke(
+      new Api.auth.ExportLoginToken({
+        apiId: cleanApiId,
+        apiHash: cleanApiHash,
+        exceptIds: [],
+      })
+    );
+
+    if (!(res instanceof Api.auth.LoginToken)) {
+      throw new Error(`Unexpected response from Telegram: ${res.className}`);
+    }
+
+    const tokenBase64 = Buffer.from(res.token).toString('base64url');
+    const loginUrl = `tg://login?token=${tokenBase64}`;
+    const qrDataUrl = await QRCode.toDataURL(loginUrl, {
+      margin: 2,
+      scale: 8,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+
+    return {
+      success: true,
+      token: tokenBase64,
+      loginUrl,
+      qrDataUrl,
+      expires: res.expires,
+      tempSession: client.session.save(),
+    };
+  }
+
+  /**
+   * Check status of QR code scan (polling) and complete login when user confirms on phone
+   */
+  async checkQrCode(tempSession, password = '', apiId = null, apiHash = null) {
+    const cleanApiId = parseInt(apiId || (await getSetting('api_id')));
+    const cleanApiHash = (apiHash || (await getSetting('api_hash')) || '').trim();
+
+    if (!tempSession) {
+      throw new Error('QR session is missing. Please refresh the QR code.');
+    }
+
+    const stringSession = new StringSession(tempSession);
+    const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
+      connectionRetries: 5,
+      useWSS: false,
+    });
+
+    await client.connect();
+
+    let result;
+    try {
+      result = await client.invoke(
+        new Api.auth.ExportLoginToken({
+          apiId: cleanApiId,
+          apiHash: cleanApiHash,
+          exceptIds: [],
+        })
+      );
+    } catch (err) {
+      if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
+        if (!password) {
+          return {
+            status: 'requires2FA',
+            message: 'Two-Step Verification password is required.',
+            tempSession: client.session.save(),
+          };
+        }
+        try {
+          const { computeCheck } = require('telegram/Password');
+          const passwordSrp = await client.invoke(new Api.account.GetPassword());
+          const passwordSrpCheck = await computeCheck(passwordSrp, password);
+          await client.invoke(
+            new Api.auth.CheckPassword({
+              password: passwordSrpCheck,
+            })
+          );
+          return await this._finalizeSessionLogin(client);
+        } catch (pwErr) {
+          if (pwErr.errorMessage === 'PASSWORD_HASH_INVALID') {
+            throw new Error('Incorrect Two-Step Verification (2FA) password.');
+          }
+          throw pwErr;
+        }
+      }
+      throw err;
+    }
+
+    if (result instanceof Api.auth.LoginToken) {
+      // Still waiting to be scanned or token refreshed
+      const tokenBase64 = Buffer.from(result.token).toString('base64url');
+      const loginUrl = `tg://login?token=${tokenBase64}`;
+      const qrDataUrl = await QRCode.toDataURL(loginUrl, {
+        margin: 2,
+        scale: 8,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      return {
+        status: 'waiting',
+        expires: result.expires,
+        token: tokenBase64,
+        loginUrl,
+        qrDataUrl,
+        tempSession: client.session.save(),
+      };
+    }
+
+    if (result instanceof Api.auth.LoginTokenMigrateTo) {
+      await client._switchDC(result.dcId);
+      const migrated = await client.invoke(
+        new Api.auth.ImportLoginToken({
+          token: result.token,
+        })
+      );
+      if (migrated instanceof Api.auth.LoginTokenSuccess) {
+        return await this._finalizeSessionLogin(client);
+      }
+      throw new Error(`Unexpected migrated result: ${migrated.className}`);
+    }
+
+    if (result instanceof Api.auth.LoginTokenSuccess) {
+      return await this._finalizeSessionLogin(client);
+    }
+
+    throw new Error(`Unknown QR state: ${result.className}`);
   }
 
   /**

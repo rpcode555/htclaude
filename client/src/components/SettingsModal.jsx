@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Send,
@@ -6,6 +6,7 @@ import {
   Shield,
   Key,
   Smartphone,
+  QrCode,
   Lock,
   CheckCircle2,
   AlertTriangle,
@@ -31,7 +32,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   const [activeTab, setActiveTab] = useState('saved_messages');
 
   // MTProto Form State
-  const [loginMethod, setLoginMethod] = useState('phone'); // 'phone' | 'session'
+  const [loginMethod, setLoginMethod] = useState('qr'); // 'qr' | 'phone' | 'session'
   const [phoneNumber, setPhoneNumber] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -45,6 +46,117 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   const [phoneCodeHash, setPhoneCodeHash] = useState('');
   const [tempSession, setTempSession] = useState('');
   const [requires2FA, setRequires2FA] = useState(false);
+
+  // QR Login State
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [qrTempSession, setQrTempSession] = useState('');
+  const [qrRequires2FA, setQrRequires2FA] = useState(false);
+  const [qr2FAPassword, setQr2FAPassword] = useState('');
+  const qrPollingRef = useRef(null);
+  const qrSessionRef = useRef('');
+
+  useEffect(() => {
+    qrSessionRef.current = qrTempSession;
+  }, [qrTempSession]);
+
+  const stopQrPolling = () => {
+    if (qrPollingRef.current) {
+      clearInterval(qrPollingRef.current);
+      qrPollingRef.current = null;
+    }
+  };
+
+  const startQrPolling = (session) => {
+    stopQrPolling();
+    qrPollingRef.current = setInterval(async () => {
+      const currentSession = qrSessionRef.current || session;
+      if (!currentSession) return;
+      try {
+        const res = await api.checkQrCode(currentSession, '', apiId.trim() || null, apiHash.trim() || null);
+        if (res.status === 'success' || res.success) {
+          stopQrPolling();
+          setSuccessMsg('Successfully linked Telegram Saved Messages via QR Code!');
+          await onRefreshStatus();
+        } else if (res.status === 'requires2FA') {
+          stopQrPolling();
+          setQrRequires2FA(true);
+          if (res.tempSession) {
+            setQrTempSession(res.tempSession);
+            qrSessionRef.current = res.tempSession;
+          }
+        } else if (res.status === 'waiting') {
+          if (res.tempSession && res.tempSession !== qrSessionRef.current) {
+            setQrTempSession(res.tempSession);
+            qrSessionRef.current = res.tempSession;
+          }
+          if (res.qrDataUrl) {
+            setQrDataUrl(res.qrDataUrl);
+          }
+        }
+      } catch (e) {
+        // silently continue polling
+      }
+    }, 3000);
+  };
+
+  const loadQrCode = async () => {
+    setQrLoading(true);
+    setErrorMsg('');
+    setQrRequires2FA(false);
+    setQr2FAPassword('');
+    try {
+      const res = await api.getQrCode(apiId.trim() || null, apiHash.trim() || null);
+      if (res.success && res.qrDataUrl) {
+        setQrDataUrl(res.qrDataUrl);
+        setQrTempSession(res.tempSession);
+        qrSessionRef.current = res.tempSession;
+        startQrPolling(res.tempSession);
+      } else {
+        setErrorMsg(res.error || 'Failed to generate QR code.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Error generating QR code.');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const handleQr2FASubmit = async (e) => {
+    e.preventDefault();
+    if (!qr2FAPassword.trim()) return;
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const res = await api.checkQrCode(
+        qrSessionRef.current || qrTempSession,
+        qr2FAPassword.trim(),
+        apiId.trim() || null,
+        apiHash.trim() || null
+      );
+      if (res.status === 'success' || res.success) {
+        setSuccessMsg('Successfully logged into Telegram Saved Messages!');
+        await onRefreshStatus();
+      } else {
+        setErrorMsg(res.error || 'Invalid 2FA password.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || '2FA verification failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'saved_messages' && loginMethod === 'qr' && !authStatus?.connected) {
+      if (!qrDataUrl && !qrLoading) {
+        loadQrCode();
+      }
+    } else {
+      stopQrPolling();
+    }
+    return () => stopQrPolling();
+  }, [loginMethod, activeTab, authStatus?.connected]);
 
   // Status & Feedback
   const [loading, setLoading] = useState(false);
@@ -344,41 +456,170 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                 <div className="space-y-4">
                   <div className="p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-300 space-y-1.5">
                     <div className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
-                      <Smartphone className="w-4 h-4 text-rose-500" />
-                      <span>Instant Telegram Saved Messages Login:</span>
+                      {loginMethod === 'qr' ? (
+                        <>
+                          <QrCode className="w-4 h-4 text-rose-500" />
+                          <span>Fast Telegram QR Code Login:</span>
+                        </>
+                      ) : loginMethod === 'phone' ? (
+                        <>
+                          <Smartphone className="w-4 h-4 text-rose-500" />
+                          <span>Instant Phone Number Login:</span>
+                        </>
+                      ) : (
+                        <>
+                          <Terminal className="w-4 h-4 text-rose-500" />
+                          <span>Direct Session String Login:</span>
+                        </>
+                      )}
                     </div>
                     <p className="text-gray-500 dark:text-gray-400">
-                      Enter your mobile number below. You will receive an official login OTP in your Telegram app to securely link your unlimited cloud storage.
+                      {loginMethod === 'qr'
+                        ? 'Scan the official Telegram QR code with your phone camera to link your cloud storage instantly without typing OTPs.'
+                        : loginMethod === 'phone'
+                        ? 'Enter your mobile number below. You will receive an official login OTP in your Telegram app.'
+                        : 'Paste an existing MTProto GramJS Session String to connect immediately.'}
                     </p>
                   </div>
 
-                  {/* Toggle between Phone Login and Session String */}
+                  {/* Toggle between QR Code, Phone Login, and Session String */}
                   <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl text-xs font-semibold">
                     <button
                       type="button"
-                      onClick={() => setLoginMethod('phone')}
-                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      onClick={() => { setLoginMethod('qr'); setErrorMsg(''); }}
+                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        loginMethod === 'qr'
+                          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>QR Code</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setLoginMethod('phone'); setErrorMsg(''); }}
+                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                         loginMethod === 'phone'
                           ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
                           : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                       }`}
                     >
-                      Phone Number (OTP)
+                      <Smartphone className="w-3.5 h-3.5" />
+                      <span>Phone (OTP)</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setLoginMethod('session')}
-                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      onClick={() => { setLoginMethod('session'); setErrorMsg(''); }}
+                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                         loginMethod === 'session'
                           ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
                           : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                       }`}
                     >
-                      Direct Session String
+                      <Terminal className="w-3.5 h-3.5" />
+                      <span>Session String</span>
                     </button>
                   </div>
 
-                  {loginMethod === 'phone' ? (
+                  {/* 1. QR Code Login Method */}
+                  {loginMethod === 'qr' && (
+                    <div className="space-y-4 animate-fade-in">
+                      <div className="p-6 rounded-2xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 flex flex-col items-center justify-center text-center">
+                        {qrLoading ? (
+                          <div className="py-12 flex flex-col items-center justify-center gap-3">
+                            <RefreshCw className="w-8 h-8 text-rose-500 animate-spin" />
+                            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+                              Connecting to Telegram & Generating QR Code...
+                            </p>
+                          </div>
+                        ) : qrDataUrl ? (
+                          <div className="space-y-4 flex flex-col items-center w-full max-w-sm">
+                            <div className="relative p-3.5 bg-white rounded-3xl shadow-xl border border-gray-200 dark:border-gray-700">
+                              <img
+                                src={qrDataUrl}
+                                alt="Telegram Login QR Code"
+                                className="w-56 h-56 object-contain rounded-xl"
+                              />
+                              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                <div className="w-12 h-12 rounded-full bg-white shadow-xl border border-gray-100 flex items-center justify-center">
+                                  <Send className="w-6 h-6 text-[#229ED9]" />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5 text-center">
+                              <div className="flex items-center justify-center gap-2 text-xs font-bold text-gray-900 dark:text-white">
+                                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span>Waiting for Telegram App Scan...</span>
+                              </div>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                                1. Open <strong>Telegram</strong> on your phone<br />
+                                2. Go to <strong>Settings</strong> &gt; <strong>Devices</strong> &gt; <strong>Link Desktop Device</strong><br />
+                                3. Point your phone camera at this QR code to confirm
+                              </p>
+                            </div>
+
+                            {qrRequires2FA && (
+                              <form onSubmit={handleQr2FASubmit} className="w-full space-y-3 pt-2 animate-fade-in text-left">
+                                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200">
+                                  QR code scanned! Please enter your Telegram 2FA cloud password to complete login:
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                    Two-Step Verification Password (2FA)
+                                  </label>
+                                  <input
+                                    type="password"
+                                    required
+                                    autoFocus
+                                    placeholder="Enter your 2FA cloud password"
+                                    value={qr2FAPassword}
+                                    onChange={(e) => setQr2FAPassword(e.target.value)}
+                                    className="w-full h-11 px-3.5 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                                  />
+                                </div>
+                                <button
+                                  type="submit"
+                                  disabled={loading}
+                                  className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+                                >
+                                  {loading ? 'Verifying 2FA...' : 'Confirm 2FA Password & Connect'}
+                                </button>
+                              </form>
+                            )}
+
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={loadQrCode}
+                                disabled={qrLoading}
+                                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300 transition-colors cursor-pointer"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                <span>Refresh QR Code</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-8 flex flex-col items-center justify-center gap-3">
+                            <QrCode className="w-12 h-12 text-gray-400 dark:text-gray-600" />
+                            <p className="text-xs text-gray-500 dark:text-gray-400">Click below to generate Telegram login QR code</p>
+                            <button
+                              type="button"
+                              onClick={loadQrCode}
+                              className="btn-primary px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+                            >
+                              Generate QR Code
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 2. Phone Number OTP Login Method */}
+                  {loginMethod === 'phone' && (
                     !codeSent ? (
                       <form onSubmit={handleSendCode} className="space-y-4">
                         <div className="space-y-2">
@@ -529,8 +770,11 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                         </div>
                       </form>
                     )
-                  ) : (
-                    <form onSubmit={handleConnectSession} className="space-y-4">
+                  )}
+
+                  {/* 3. Session String Login Method */}
+                  {loginMethod === 'session' && (
+                    <form onSubmit={handleConnectSession} className="space-y-4 animate-fade-in">
                       <div className="space-y-1.5">
                         <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
                           Telegram GramJS Session String

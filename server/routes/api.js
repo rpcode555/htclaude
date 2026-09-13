@@ -93,6 +93,8 @@ router.get('/auth/me', requireAdminAuth, authController.getMe);
 router.get('/auth/status', requireAdminAuth, authController.getStatus);
 router.post('/auth/send-code', authLimiter, requireAdminAuth, authController.sendCode);
 router.post('/auth/verify-code', authLimiter, requireAdminAuth, authController.verifyCode);
+router.post('/auth/qr-code', authLimiter, requireAdminAuth, authController.getQrCode);
+router.post('/auth/check-qr', apiLimiter, requireAdminAuth, authController.checkQrCode);
 router.post('/auth/session-connect', authLimiter, requireAdminAuth, authController.connectSessionString);
 router.post('/auth/backup-db', requireAdminAuth, authController.backupDatabase);
 router.post('/auth/disconnect', requireAdminAuth, authController.disconnect);

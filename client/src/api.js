@@ -93,6 +93,26 @@ export const api = {
     return await res.json();
   },
 
+  async getQrCode(apiId = null, apiHash = null) {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/auth/qr-code`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiId, apiHash }),
+    });
+    return await res.json();
+  },
+
+  async checkQrCode(tempSession, password = '', apiId = null, apiHash = null) {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/auth/check-qr`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tempSession, password, apiId, apiHash }),
+    });
+    return await res.json();
+  },
+
   async connectSessionString(sessionString, apiId = null, apiHash = null) {
     const headers = await getAuthHeader();
     let body = {};

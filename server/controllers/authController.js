@@ -100,6 +100,37 @@ exports.connectSessionString = async (req, res) => {
   }
 };
 
+exports.getQrCode = async (req, res) => {
+  try {
+    let { apiId, apiHash } = req.body || {};
+    if (!apiId) apiId = await getSetting('api_id');
+    if (!apiHash) apiHash = await getSetting('api_hash');
+
+    const result = await telegramService.getQrCode(apiId, apiHash);
+    res.json(result);
+  } catch (err) {
+    console.error('[Auth] getQrCode error:', err);
+    res.status(400).json({ success: false, error: err.message || 'Failed to generate QR code.' });
+  }
+};
+
+exports.checkQrCode = async (req, res) => {
+  try {
+    let { tempSession, password, apiId, apiHash } = req.body || {};
+    if (!tempSession) {
+      return res.status(400).json({ success: false, error: 'QR session is required.' });
+    }
+    if (!apiId) apiId = await getSetting('api_id');
+    if (!apiHash) apiHash = await getSetting('api_hash');
+
+    const result = await telegramService.checkQrCode(tempSession, password, apiId, apiHash);
+    res.json(result);
+  } catch (err) {
+    console.error('[Auth] checkQrCode error:', err);
+    res.status(400).json({ success: false, error: err.message || 'Failed to check QR login status.' });
+  }
+};
+
 exports.backupDatabase = async (req, res) => {
   try {
     const result = await telegramService.backupDatabaseToSavedMessages();
