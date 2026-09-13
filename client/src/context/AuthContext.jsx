@@ -17,6 +17,8 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
+const DEFAULT_ADMIN_EMAIL = 'palranjan144@gmail.com';
+
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,16 @@ export function AuthProvider({ children }) {
         return true;
       }
 
+      // If user's verified Google account is palranjan144@gmail.com, grant access even if serverless endpoint is cold-starting
+      const isOwner = (user.email || '').trim().toLowerCase() === DEFAULT_ADMIN_EMAIL.toLowerCase();
+      if (isOwner && (!res || res.status >= 500 || res.status === 404)) {
+        console.log('[Auth] Owner account recognized, granting access:', user.email);
+        setCurrentUser(user);
+        setIsAdmin(true);
+        setAuthError('');
+        return true;
+      }
+
       // Not authorized as admin
       const errorMsg = data?.error || `Access Denied: Account (${user.email}) is not authorized. Only the verified administrator can access this storage.`;
       console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
@@ -61,6 +73,14 @@ export function AuthProvider({ children }) {
       return false;
     } catch (err) {
       console.error('[Auth Error] Failed to verify credentials with server:', err);
+      const isOwner = (user.email || '').trim().toLowerCase() === DEFAULT_ADMIN_EMAIL.toLowerCase();
+      if (isOwner) {
+        console.log('[Auth] Owner authenticated despite network delay:', user.email);
+        setCurrentUser(user);
+        setIsAdmin(true);
+        setAuthError('');
+        return true;
+      }
       setCurrentUser(null);
       setIsAdmin(false);
       setAuthError('Authentication verification failed. Please try again.');
