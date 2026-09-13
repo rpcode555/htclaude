@@ -166,12 +166,9 @@ class Database {
 
     const performSave = () => {
       try {
-        // Persist all settings (including session_string) so the user never has to re-login.
+        // Persist all settings (including session_string and OTP verification tokens) so the user never has to re-login.
         // telecloud_db.json is stored safely in DATA_DIR and ignored by Git.
         const sanitized = JSON.parse(JSON.stringify(data));
-        if (sanitized.settings) {
-          delete sanitized.settings.phone_code_hash;
-        }
 
         const jsonContent = JSON.stringify(sanitized, null, 2);
         const tempPath = `${DB_FILE}.tmp`;

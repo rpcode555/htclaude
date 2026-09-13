@@ -42,6 +42,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   const [sessionStringInput, setSessionStringInput] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [sentToPhone, setSentToPhone] = useState('');
+  const [phoneCodeHash, setPhoneCodeHash] = useState('');
   const [requires2FA, setRequires2FA] = useState(false);
 
   // Status & Feedback
@@ -76,6 +77,9 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
       if (res.success) {
         setCodeSent(true);
         setSentToPhone(formattedPhone);
+        if (res.phoneCodeHash) {
+          setPhoneCodeHash(res.phoneCodeHash);
+        }
         setSuccessMsg(res.message || `Verification code sent to Telegram for ${formattedPhone}!`);
       } else {
         setErrorMsg(res.error || 'Failed to send verification code.');
@@ -95,7 +99,12 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     setLoading(true);
 
     try {
-      const res = await api.verifyPhoneCode(otpCode.trim(), password2FA);
+      const res = await api.verifyPhoneCode(
+        otpCode.trim(),
+        password2FA,
+        phoneCodeHash,
+        sentToPhone || phoneNumber
+      );
       if (res.requires2FA) {
         setRequires2FA(true);
         setErrorMsg('Please enter your Two-Step Verification (2FA) password.');
@@ -169,6 +178,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         await onRefreshStatus();
         setSuccessMsg('Disconnected from Telegram. Now using Sandbox Mode.');
         setCodeSent(false);
+        setPhoneCodeHash('');
       } catch (err) {
         setErrorMsg(err.message);
       } finally {
@@ -458,7 +468,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                           <span>Code sent to: <strong>{sentToPhone || phoneNumber}</strong></span>
                           <button
                             type="button"
-                            onClick={() => { setCodeSent(false); setOtpCode(''); }}
+                            onClick={() => { setCodeSent(false); setOtpCode(''); setPhoneCodeHash(''); }}
                             className="text-[11px] text-rose-600 dark:text-rose-400 font-bold hover:underline cursor-pointer"
                           >
                             Change
@@ -498,7 +508,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                         <div className="flex gap-2.5">
                           <button
                             type="button"
-                            onClick={() => { setCodeSent(false); setOtpCode(''); }}
+                            onClick={() => { setCodeSent(false); setOtpCode(''); setPhoneCodeHash(''); }}
                             className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
                           >
                             Back

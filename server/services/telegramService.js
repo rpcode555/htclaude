@@ -300,12 +300,19 @@ class TelegramService {
   /**
    * Verify phone OTP code and complete MTProto login to Saved Messages
    */
-  async verifyPhoneCode(code, password = '') {
+  async verifyPhoneCode(code, password = '', passedPhoneCodeHash = null, passedPhoneNumber = null) {
     const apiId = parseInt(await getSetting('api_id'));
     const apiHash = await getSetting('api_hash');
-    const phoneNumber = await getSetting('phone_number');
-    const phoneCodeHash = this.tempPhoneCodeHash || (await getSetting('phone_code_hash'));
+    const phoneNumber = (passedPhoneNumber || this.tempPhoneNumber || (await getSetting('phone_number')) || '').trim();
+    const phoneCodeHash = (passedPhoneCodeHash || this.tempPhoneCodeHash || (await getSetting('phone_code_hash')) || '').trim();
     const tempAuthSession = await getSetting('temp_auth_session');
+
+    if (!phoneNumber) {
+      throw new Error('Phone number is missing. Please click Back and request a new code.');
+    }
+    if (!phoneCodeHash) {
+      throw new Error('Verification session expired or phoneCodeHash missing. Please click Back and request a new code.');
+    }
 
     let client = this.tempClient;
     if (!client) {

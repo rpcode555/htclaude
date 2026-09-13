@@ -60,12 +60,12 @@ exports.sendCode = async (req, res) => {
 
 exports.verifyCode = async (req, res) => {
   try {
-    const { code, password } = req.body;
+    const { code, password, phoneCodeHash, phoneNumber } = req.body;
     if (!code) {
       return res.status(400).json({ success: false, error: 'Verification code is required.' });
     }
 
-    const result = await telegramService.verifyPhoneCode(code, password);
+    const result = await telegramService.verifyPhoneCode(code, password, phoneCodeHash, phoneNumber);
     res.json(result);
   } catch (err) {
     console.error('[Auth] verifyCode error:', err);
