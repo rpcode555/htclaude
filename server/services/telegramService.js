@@ -25,6 +25,7 @@ class TelegramService {
     this.tempPhoneCodeHash = null;
     this.tempPhoneNumber = null;
     this.listenerAttached = false;
+    this._initPromise = null;
   }
 
   /**
@@ -64,10 +65,45 @@ class TelegramService {
   }
 
   /**
+   * Lazily ensures TelegramClient is connected (essential for Vercel / serverless runtimes)
+   */
+  async ensureClient() {
+    if (this.client) {
+      try {
+        if (this.client.connected) {
+          return this.client;
+        }
+        await this.client.connect();
+        return this.client;
+      } catch (e) {
+        console.warn('[Telegram] Reconnection failed, resetting client:', e.message);
+        this.client = null;
+      }
+    }
+
+    if (this._initPromise) {
+      return this._initPromise;
+    }
+
+    this._initPromise = (async () => {
+      await this.init();
+      return this.client;
+    })();
+
+    try {
+      return await this._initPromise;
+    } finally {
+      this._initPromise = null;
+    }
+  }
+
+  /**
    * Real-time sync: Listens for files sent to "Saved Messages" in any Telegram client
    */
   setupSavedMessagesListener() {
     if (!this.client || this.listenerAttached) return;
+    const { isServerless } = require('../config/paths');
+    if (isServerless) return;
 
     try {
       this.client.addEventHandler(async (event) => {
@@ -142,6 +178,7 @@ class TelegramService {
    * Get current connection status and details (without leaking secrets)
    */
   async getStatus() {
+    await this.ensureClient();
     const apiId = process.env.TELEGRAM_API_ID || (await getSetting('api_id'));
     const hasSession = !!(process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')));
 
@@ -366,6 +403,7 @@ class TelegramService {
    * Supports UNLIMITED file sizes by automatically chunking files exceeding 1.9GB.
    */
   async uploadFile({ originalName, buffer, mimeType, size, filePath = null }) {
+    await this.ensureClient();
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const localCachedDest = path.join(CACHE_DIR, `${Date.now()}_${safeName}`);
     const MAX_TELEGRAM_SINGLE_FILE = 1900 * 1024 * 1024; // 1.9 GB safe ceiling for MTProto single document
@@ -503,6 +541,7 @@ class TelegramService {
    * Download / Stream a file from Telegram Saved Messages with multi-part chunk reconstruction and local cache
    */
   async getFileStream(fileRecord) {
+    await this.ensureClient();
     const safeName = (fileRecord.name || fileRecord.original_name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
     const cacheKey = fileRecord.telegram_msg_id || fileRecord.id;
     const cacheFilePath = path.join(CACHE_DIR, `${fileRecord.id}_${cacheKey}_${safeName}`);
@@ -626,6 +665,7 @@ class TelegramService {
    */
   async deleteTelegramMessage(msgIdsOrRecord, telegramChatId = 'me') {
     if (!msgIdsOrRecord) return;
+    await this.ensureClient();
 
     let ids = [];
     if (Array.isArray(msgIdsOrRecord)) {
@@ -656,6 +696,7 @@ class TelegramService {
    * Backup the database JSON directly into Telegram Saved Messages
    */
   async backupDatabaseToSavedMessages() {
+    await this.ensureClient();
     if (!this.client) {
       return { success: false, error: 'Telegram MTProto client is not connected' };
     }
