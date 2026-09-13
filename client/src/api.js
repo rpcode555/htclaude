@@ -83,12 +83,12 @@ export const api = {
     return await res.json();
   },
 
-  async verifyPhoneCode(code, password, phoneCodeHash = null, phoneNumber = null) {
+  async verifyPhoneCode(code, password, phoneCodeHash = null, phoneNumber = null, tempSession = null) {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/auth/verify-code`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, password, phoneCodeHash, phoneNumber }),
+      body: JSON.stringify({ code, password, phoneCodeHash, phoneNumber, tempSession }),
     });
     return await res.json();
   },

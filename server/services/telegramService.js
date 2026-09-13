@@ -290,6 +290,7 @@ class TelegramService {
     return {
       success: true,
       phoneCodeHash,
+      tempSession: tempSessionString,
       isCodeViaApp,
       message: isCodeViaApp
         ? `Verification code sent to your Telegram app for ${cleanPhone}!`
@@ -300,12 +301,12 @@ class TelegramService {
   /**
    * Verify phone OTP code and complete MTProto login to Saved Messages
    */
-  async verifyPhoneCode(code, password = '', passedPhoneCodeHash = null, passedPhoneNumber = null) {
+  async verifyPhoneCode(code, password = '', passedPhoneCodeHash = null, passedPhoneNumber = null, passedTempSession = null) {
     const apiId = parseInt(await getSetting('api_id'));
     const apiHash = await getSetting('api_hash');
     const phoneNumber = (passedPhoneNumber || this.tempPhoneNumber || (await getSetting('phone_number')) || '').trim();
     const phoneCodeHash = (passedPhoneCodeHash || this.tempPhoneCodeHash || (await getSetting('phone_code_hash')) || '').trim();
-    const tempAuthSession = await getSetting('temp_auth_session');
+    const tempAuthSession = (passedTempSession || (await getSetting('temp_auth_session')) || '').trim();
 
     if (!phoneNumber) {
       throw new Error('Phone number is missing. Please click Back and request a new code.');
@@ -315,9 +316,12 @@ class TelegramService {
     }
 
     let client = this.tempClient;
-    if (!client) {
-      // Reconstitute client with the exact same AuthKey from sendPhoneCode
-      const stringSession = new StringSession(tempAuthSession || '');
+    if (!client || (passedTempSession && client.session.save() !== passedTempSession)) {
+      if (!tempAuthSession) {
+        throw new Error('Authentication session lost. Please click Back and request a fresh code.');
+      }
+      // Reconstitute client with the exact DC and AuthKey from sendPhoneCode
+      const stringSession = new StringSession(tempAuthSession);
       client = new TelegramClient(stringSession, apiId, apiHash, {
         connectionRetries: 5,
         useWSS: false,
@@ -351,6 +355,10 @@ class TelegramService {
             password: passwordHash,
           })
         );
+      } else if (err.errorMessage === 'PHONE_CODE_EXPIRED') {
+        throw new Error('Verification code has expired. Please click Back and send a fresh code.');
+      } else if (err.errorMessage === 'PHONE_CODE_INVALID') {
+        throw new Error('Invalid verification code. Please check the code in your Telegram app and try again.');
       } else {
         throw err;
       }
