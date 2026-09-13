@@ -347,14 +347,21 @@ class TelegramService {
             message: 'Two-Step Verification password is required.',
           };
         }
-        const passwordSrp = await client.invoke(new Api.account.GetPassword());
-        const { computeHash } = require('telegram/Password');
-        const passwordHash = await computeHash(passwordSrp, password);
-        await client.invoke(
-          new Api.auth.CheckPassword({
-            password: passwordHash,
-          })
-        );
+        try {
+          const { computeCheck } = require('telegram/Password');
+          const passwordSrp = await client.invoke(new Api.account.GetPassword());
+          const passwordSrpCheck = await computeCheck(passwordSrp, password);
+          await client.invoke(
+            new Api.auth.CheckPassword({
+              password: passwordSrpCheck,
+            })
+          );
+        } catch (pwErr) {
+          if (pwErr.errorMessage === 'PASSWORD_HASH_INVALID') {
+            throw new Error('Incorrect Two-Step Verification (2FA) password. Please check your password and try again.');
+          }
+          throw pwErr;
+        }
       } else if (err.errorMessage === 'PHONE_CODE_EXPIRED') {
         throw new Error('Verification code has expired. Please click Back and send a fresh code.');
       } else if (err.errorMessage === 'PHONE_CODE_INVALID') {
