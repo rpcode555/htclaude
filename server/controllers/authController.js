@@ -28,11 +28,25 @@ exports.getStatus = async (req, res) => {
 
 exports.sendCode = async (req, res) => {
   try {
-    const { apiId, apiHash, phoneNumber } = req.body;
-    if (!apiId || !apiHash || !phoneNumber) {
+    let { apiId, apiHash, phoneNumber } = req.body;
+    if (!apiId) {
+      apiId = await getSetting('api_id');
+    }
+    if (!apiHash) {
+      apiHash = await getSetting('api_hash');
+    }
+
+    if (!phoneNumber) {
       return res.status(400).json({
         success: false,
-        error: 'Please provide API ID, API Hash, and Phone Number (with country code).',
+        error: 'Phone number is required (e.g. +91 9876543210).',
+      });
+    }
+
+    if (!apiId || !apiHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Telegram API credentials not configured. Please provide API ID & API Hash or set TELEGRAM_API_ID and TELEGRAM_API_HASH in server environment.',
       });
     }
 
@@ -61,11 +75,20 @@ exports.verifyCode = async (req, res) => {
 
 exports.connectSessionString = async (req, res) => {
   try {
-    const { apiId, apiHash, sessionString } = req.body;
-    if (!apiId || !apiHash || !sessionString) {
+    let { apiId, apiHash, sessionString } = req.body;
+    if (!apiId) apiId = await getSetting('api_id');
+    if (!apiHash) apiHash = await getSetting('api_hash');
+
+    if (!sessionString) {
       return res.status(400).json({
         success: false,
-        error: 'API ID, API Hash, and Session String are all required.',
+        error: 'Telegram Session String is required.',
+      });
+    }
+    if (!apiId || !apiHash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Telegram API ID & API Hash are missing.',
       });
     }
 

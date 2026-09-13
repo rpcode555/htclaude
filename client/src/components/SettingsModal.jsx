@@ -32,13 +32,16 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
 
   // MTProto Form State
   const [loginMethod, setLoginMethod] = useState('phone'); // 'phone' | 'session'
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [countryCode, setCountryCode] = useState('+91');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [apiId, setApiId] = useState('');
   const [apiHash, setApiHash] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [password2FA, setPassword2FA] = useState('');
   const [sessionStringInput, setSessionStringInput] = useState('');
   const [codeSent, setCodeSent] = useState(false);
+  const [sentToPhone, setSentToPhone] = useState('');
   const [requires2FA, setRequires2FA] = useState(false);
 
   // Status & Feedback
@@ -54,11 +57,26 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     setSuccessMsg('');
     setLoading(true);
 
+    let rawPhone = phoneNumber.trim().replace(/[\s\-()]/g, '');
+    if (!rawPhone) {
+      setErrorMsg('Please enter your mobile phone number.');
+      setLoading(false);
+      return;
+    }
+
+    // Auto prepend country code if not present
+    let formattedPhone = rawPhone;
+    if (!formattedPhone.startsWith('+')) {
+      if (formattedPhone.startsWith('0')) formattedPhone = formattedPhone.substring(1);
+      formattedPhone = `${countryCode}${formattedPhone}`;
+    }
+
     try {
-      const res = await api.sendPhoneCode(apiId.trim(), apiHash.trim(), phoneNumber.trim());
+      const res = await api.sendPhoneCode(formattedPhone, apiId.trim() || null, apiHash.trim() || null);
       if (res.success) {
         setCodeSent(true);
-        setSuccessMsg(res.message || 'Verification code sent to your Telegram app!');
+        setSentToPhone(formattedPhone);
+        setSuccessMsg(res.message || `Verification code sent to Telegram for ${formattedPhone}!`);
       } else {
         setErrorMsg(res.error || 'Failed to send verification code.');
       }
@@ -102,7 +120,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     setLoading(true);
 
     try {
-      const res = await api.connectSessionString(apiId.trim(), apiHash.trim(), sessionStringInput.trim());
+      const res = await api.connectSessionString(sessionStringInput.trim(), apiId.trim() || null, apiHash.trim() || null);
       if (res.success) {
         setSuccessMsg(`Successfully connected to Telegram Saved Messages!`);
         await onRefreshStatus();
@@ -308,22 +326,13 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-300 space-y-2">
-                    <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-white">
-                      <Info className="w-4 h-4 text-rose-500" />
-                      <span>Connect to Telegram Saved Messages:</span>
+                  <div className="p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-300 space-y-1.5">
+                    <div className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
+                      <Smartphone className="w-4 h-4 text-rose-500" />
+                      <span>Instant Telegram Saved Messages Login:</span>
                     </div>
                     <p className="text-gray-500 dark:text-gray-400">
-                      Get your free <strong>API ID</strong> & <strong>API Hash</strong> from{' '}
-                      <a
-                        href="https://my.telegram.org/auth"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-rose-600 dark:text-rose-400 hover:underline inline-flex items-center gap-1 font-medium"
-                      >
-                        my.telegram.org <ExternalLink className="w-3 h-3" />
-                      </a>
-                      . Files are stored directly into your personal Telegram Saved Messages chat with unlimited size support!
+                      Enter your mobile number below. You will receive an official login OTP in your Telegram app to securely link your unlimited cloud storage.
                     </p>
                   </div>
 
@@ -356,88 +365,140 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                   {loginMethod === 'phone' ? (
                     !codeSent ? (
                       <form onSubmit={handleSendCode} className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">API ID</label>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-800 dark:text-gray-200 flex items-center justify-between">
+                            <span>Telegram Mobile Number</span>
+                            <span className="text-[10px] text-gray-400 font-normal">Fast 1-Click Login</span>
+                          </label>
+
+                          <div className="flex gap-2">
+                            {/* Country Code Dropdown */}
+                            <select
+                              value={countryCode}
+                              onChange={(e) => setCountryCode(e.target.value)}
+                              className="h-11 px-3 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs font-bold text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none cursor-pointer"
+                            >
+                              <option value="+91">🇮🇳 +91 (India)</option>
+                              <option value="+1">🇺🇸 +1 (US/CA)</option>
+                              <option value="+44">🇬🇧 +44 (UK)</option>
+                              <option value="+971">🇦🇪 +971 (UAE)</option>
+                              <option value="+61">🇦🇺 +61 (AU)</option>
+                              <option value="+65">🇸🇬 +65 (SG)</option>
+                              <option value="+49">🇩🇪 +49 (DE)</option>
+                              <option value="+33">🇫🇷 +33 (FR)</option>
+                              <option value="+7">🇷🇺 +7 (RU)</option>
+                              <option value="+880">🇧🇩 +880 (BD)</option>
+                              <option value="+977">🇳🇵 +977 (NP)</option>
+                              <option value="+92">🇵🇰 +92 (PK)</option>
+                            </select>
+
+                            {/* 10-Digit Mobile Input */}
                             <input
-                              type="text"
+                              type="tel"
                               required
-                              placeholder="e.g. 12345678"
-                              value={apiId}
-                              onChange={(e) => setApiId(e.target.value)}
-                              className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                              placeholder="Enter mobile number (e.g. 9876543210)"
+                              value={phoneNumber}
+                              onChange={(e) => setPhoneNumber(e.target.value.replace(/[^0-9+]/g, ''))}
+                              className="flex-1 h-11 px-3.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none tracking-wide"
                             />
                           </div>
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">API Hash</label>
-                            <input
-                              type="password"
-                              required
-                              placeholder="e.g. 0123456789abcdef0123456789abcdef"
-                              value={apiHash}
-                              onChange={(e) => setApiHash(e.target.value)}
-                              className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
-                            />
-                          </div>
+
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            A verification code will be sent to your official Telegram app for this number.
+                          </p>
                         </div>
 
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                            Phone Number (with country code)
-                          </label>
-                          <input
-                            type="tel"
-                            required
-                            placeholder="e.g. +919876543210"
-                            value={phoneNumber}
-                            onChange={(e) => setPhoneNumber(e.target.value)}
-                            className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
-                          />
+                        {/* Optional Advanced Toggle for custom API ID/Hash */}
+                        <div className="pt-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setShowAdvanced(!showAdvanced)}
+                            className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>{showAdvanced ? '− Hide Custom API ID & Hash' : '+ Custom API ID & Hash (Optional)'}</span>
+                          </button>
+
+                          {showAdvanced && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2.5 animate-fade-in">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">Custom API ID</label>
+                                <input
+                                  type="text"
+                                  placeholder="Leave empty for default"
+                                  value={apiId}
+                                  onChange={(e) => setApiId(e.target.value)}
+                                  className="w-full px-3 py-1.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">Custom API Hash</label>
+                                <input
+                                  type="password"
+                                  placeholder="Leave empty for default"
+                                  value={apiHash}
+                                  onChange={(e) => setApiHash(e.target.value)}
+                                  className="w-full px-3 py-1.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <button
                           type="submit"
                           disabled={loading}
-                          className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+                          className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-rose-500/20"
                         >
-                          {loading ? 'Sending Code...' : 'Send Verification Code'}
+                          {loading ? 'Sending Verification Code...' : 'Send Verification Code'}
                         </button>
                       </form>
                     ) : (
                       <form onSubmit={handleVerifyCode} className="space-y-4 animate-fade-in">
+                        <div className="p-3 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-200 flex items-center justify-between">
+                          <span>Code sent to: <strong>{sentToPhone || phoneNumber}</strong></span>
+                          <button
+                            type="button"
+                            onClick={() => { setCodeSent(false); setOtpCode(''); }}
+                            className="text-[11px] text-rose-600 dark:text-rose-400 font-bold hover:underline cursor-pointer"
+                          >
+                            Change
+                          </button>
+                        </div>
+
                         <div className="space-y-1.5">
                           <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                            Enter Verification Code (sent to your Telegram app)
+                            Enter Verification Code (from Telegram app)
                           </label>
                           <input
                             type="text"
                             required
+                            autoFocus
                             placeholder="e.g. 12345"
                             value={otpCode}
                             onChange={(e) => setOtpCode(e.target.value)}
-                            className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                            className="w-full h-11 px-3.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-base font-mono font-bold tracking-widest text-center text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
                           />
                         </div>
 
                         {requires2FA && (
-                          <div className="space-y-1.5">
+                          <div className="space-y-1.5 animate-fade-in">
                             <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
                               Two-Step Verification Password (2FA)
                             </label>
                             <input
                               type="password"
-                              placeholder="Enter 2FA Password"
+                              placeholder="Enter your 2FA cloud password"
                               value={password2FA}
                               onChange={(e) => setPassword2FA(e.target.value)}
-                              className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                              className="w-full h-11 px-3.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
                             />
                           </div>
                         )}
 
-                        <div className="flex gap-2">
+                        <div className="flex gap-2.5">
                           <button
                             type="button"
-                            onClick={() => setCodeSent(false)}
+                            onClick={() => { setCodeSent(false); setOtpCode(''); }}
                             className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
                           >
                             Back
@@ -445,7 +506,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                           <button
                             type="submit"
                             disabled={loading}
-                            className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+                            className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-rose-500/20"
                           >
                             {loading ? 'Verifying...' : 'Verify & Connect'}
                           </button>
@@ -454,31 +515,6 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                     )
                   ) : (
                     <form onSubmit={handleConnectSession} className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">API ID</label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="e.g. 12345678"
-                            value={apiId}
-                            onChange={(e) => setApiId(e.target.value)}
-                            className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">API Hash</label>
-                          <input
-                            type="password"
-                            required
-                            placeholder="e.g. 0123456789abcdef0123456789abcdef"
-                            value={apiHash}
-                            onChange={(e) => setApiHash(e.target.value)}
-                            className="w-full px-3.5 py-2 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
-                          />
-                        </div>
-                      </div>
-
                       <div className="space-y-1.5">
                         <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">
                           Telegram GramJS Session String
@@ -493,10 +529,46 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                         />
                       </div>
 
+                      {/* Optional Advanced Toggle for custom API ID/Hash */}
+                      <div className="pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowAdvanced(!showAdvanced)}
+                          className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 hover:text-rose-500 dark:hover:text-rose-400 transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>{showAdvanced ? '− Hide Custom API ID & Hash' : '+ Custom API ID & Hash (Optional)'}</span>
+                        </button>
+
+                        {showAdvanced && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2.5 animate-fade-in">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">Custom API ID</label>
+                              <input
+                                type="text"
+                                placeholder="Leave empty for default"
+                                value={apiId}
+                                onChange={(e) => setApiId(e.target.value)}
+                                className="w-full px-3 py-1.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-semibold text-gray-600 dark:text-gray-400">Custom API Hash</label>
+                              <input
+                                type="password"
+                                placeholder="Leave empty for default"
+                                value={apiHash}
+                                onChange={(e) => setApiHash(e.target.value)}
+                                className="w-full px-3 py-1.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs text-gray-900 dark:text-gray-100 focus:border-rose-500 outline-none"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <button
                         type="submit"
                         disabled={loading}
-                        className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+                        className="btn-primary w-full py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-rose-500/20"
                       >
                         {loading ? 'Authenticating...' : 'Connect With Session String'}
                       </button>

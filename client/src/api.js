@@ -64,12 +64,21 @@ export const api = {
     return await res.json();
   },
 
-  async sendPhoneCode(apiId, apiHash, phoneNumber) {
+  async sendPhoneCode(phoneNumber, apiId = null, apiHash = null) {
     const headers = await getAuthHeader();
+    let body = {};
+    if (typeof phoneNumber === 'object' && phoneNumber !== null) {
+      body = phoneNumber;
+    } else if (apiHash && !phoneNumber.startsWith('+') && isNaN(Number(phoneNumber)) && !isNaN(Number(phoneNumber))) {
+      // backward compatibility if (apiId, apiHash, phoneNumber)
+      body = { apiId: phoneNumber, apiHash, phoneNumber: apiId };
+    } else {
+      body = { phoneNumber, apiId, apiHash };
+    }
     const res = await fetch(`${API_BASE}/auth/send-code`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiId, apiHash, phoneNumber }),
+      body: JSON.stringify(body),
     });
     return await res.json();
   },
@@ -84,12 +93,25 @@ export const api = {
     return await res.json();
   },
 
-  async connectSessionString(apiId, apiHash, sessionString) {
+  async connectSessionString(sessionString, apiId = null, apiHash = null) {
     const headers = await getAuthHeader();
+    let body = {};
+    if (typeof sessionString === 'object') {
+      body = sessionString;
+    } else if (sessionString && apiId && apiHash) {
+      // handle both (sessionString, apiId, apiHash) and legacy (apiId, apiHash, sessionString)
+      if (sessionString.length > 50) {
+        body = { sessionString, apiId, apiHash };
+      } else {
+        body = { apiId: sessionString, apiHash: apiId, sessionString: apiHash };
+      }
+    } else {
+      body = { sessionString, apiId, apiHash };
+    }
     const res = await fetch(`${API_BASE}/auth/session-connect`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiId, apiHash, sessionString }),
+      body: JSON.stringify(body),
     });
     return await res.json();
   },

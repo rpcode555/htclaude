@@ -243,13 +243,24 @@ class TelegramService {
    * Send phone login OTP code to Telegram app / SMS
    */
   async sendPhoneCode(apiId, apiHash, phoneNumber) {
-    const cleanApiId = parseInt(apiId);
-    if (!cleanApiId || !apiHash || !phoneNumber) {
-      throw new Error('API ID, API Hash, and Phone Number are required.');
+    const cleanApiId = parseInt(apiId || (await getSetting('api_id')));
+    const cleanApiHash = (apiHash || (await getSetting('api_hash')) || '').trim();
+
+    if (!cleanApiId || !cleanApiHash) {
+      throw new Error('Telegram API ID and API Hash are required.');
+    }
+
+    if (!phoneNumber) {
+      throw new Error('Phone number is required.');
+    }
+
+    let cleanPhone = phoneNumber.trim().replace(/[\s\-()]/g, '');
+    if (!cleanPhone.startsWith('+')) {
+      cleanPhone = '+' + cleanPhone;
     }
 
     const stringSession = new StringSession('');
-    const client = new TelegramClient(stringSession, cleanApiId, apiHash.trim(), {
+    const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
       connectionRetries: 5,
       useWSS: false,
     });
@@ -259,27 +270,30 @@ class TelegramService {
     const { phoneCodeHash, isCodeViaApp } = await client.sendCode(
       {
         apiId: cleanApiId,
-        apiHash: apiHash.trim(),
+        apiHash: cleanApiHash,
       },
-      phoneNumber.trim()
+      cleanPhone
     );
 
+    // CRITICAL: Persist the MTProto AuthKey session so verifyPhoneCode can reuse the exact same session
+    const tempSessionString = client.session.save();
+    await setSetting('temp_auth_session', tempSessionString);
     await setSetting('api_id', cleanApiId.toString());
-    await setSetting('api_hash', apiHash.trim());
-    await setSetting('phone_number', phoneNumber.trim());
+    await setSetting('api_hash', cleanApiHash);
+    await setSetting('phone_number', cleanPhone);
     await setSetting('phone_code_hash', phoneCodeHash);
 
     this.tempClient = client;
     this.tempPhoneCodeHash = phoneCodeHash;
-    this.tempPhoneNumber = phoneNumber.trim();
+    this.tempPhoneNumber = cleanPhone;
 
     return {
       success: true,
       phoneCodeHash,
       isCodeViaApp,
       message: isCodeViaApp
-        ? 'Verification code sent to your Telegram app!'
-        : 'Verification code sent via SMS!',
+        ? `Verification code sent to your Telegram app for ${cleanPhone}!`
+        : `Verification code sent via SMS for ${cleanPhone}!`,
     };
   }
 
@@ -291,10 +305,12 @@ class TelegramService {
     const apiHash = await getSetting('api_hash');
     const phoneNumber = await getSetting('phone_number');
     const phoneCodeHash = this.tempPhoneCodeHash || (await getSetting('phone_code_hash'));
+    const tempAuthSession = await getSetting('temp_auth_session');
 
     let client = this.tempClient;
     if (!client) {
-      const stringSession = new StringSession('');
+      // Reconstitute client with the exact same AuthKey from sendPhoneCode
+      const stringSession = new StringSession(tempAuthSession || '');
       client = new TelegramClient(stringSession, apiId, apiHash, {
         connectionRetries: 5,
         useWSS: false,
@@ -302,12 +318,14 @@ class TelegramService {
       await client.connect();
     }
 
+    const cleanCode = (code || '').trim().replace(/[\s\-]/g, '');
+
     try {
       await client.invoke(
         new Api.auth.SignIn({
           phoneNumber,
           phoneCodeHash,
-          phoneCode: code.trim(),
+          phoneCode: cleanCode,
         })
       );
     } catch (err) {
@@ -337,9 +355,15 @@ class TelegramService {
     await setSetting('auth_type', 'saved_messages');
     await setSetting('chat_id', 'me');
 
+    // Clear temporary auth data
+    await setSetting('temp_auth_session', '');
+    await setSetting('phone_code_hash', '');
+
     this.client = client;
     this.authType = 'saved_messages';
     this.tempClient = null;
+    this.tempPhoneCodeHash = null;
+    this.tempPhoneNumber = null;
     this.setupSavedMessagesListener();
 
     const me = await client.getMe();
@@ -359,8 +383,9 @@ class TelegramService {
    * Direct login using an existing GramJS MTProto Session String
    */
   async connectSessionString(apiId, apiHash, sessionString) {
-    const cleanApiId = parseInt(apiId);
-    if (!cleanApiId || !apiHash || !sessionString) {
+    const cleanApiId = parseInt(apiId || (await getSetting('api_id')));
+    const cleanApiHash = (apiHash || (await getSetting('api_hash')) || '').trim();
+    if (!cleanApiId || !cleanApiHash || !sessionString) {
       throw new Error('API ID, API Hash, and Session String are all required.');
     }
 
