@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const cloudDbService = require('./services/cloudDbService');
 const firestoreService = require('./services/firestoreService');
+const { updateEnvFile } = require('./config/envHelper');
 
 const { DATA_DIR } = require('./config/paths');
 const DB_FILE = path.join(DATA_DIR, 'telecloud_db.json');
@@ -108,9 +109,13 @@ class Database {
           this.data.folders = Array.from(folderMap.values());
         }
         if (cloudData.settings && Object.keys(cloudData.settings).length > 0) {
-          // Never overwrite settings with sensitive remote values
-          const { session_string, bot_token, api_id, api_hash, ...safeSettings } = cloudData.settings;
-          this.data.settings = { ...this.data.settings, ...safeSettings };
+          const isManualDisconnected = this.data.settings?.manual_disconnect === true;
+          if (isManualDisconnected) {
+            const { session_string, ...safeSettings } = cloudData.settings;
+            this.data.settings = { ...this.data.settings, ...safeSettings, session_string: '', manual_disconnect: true };
+          } else {
+            this.data.settings = { ...this.data.settings, ...cloudData.settings };
+          }
         }
         if (Array.isArray(cloudData.api_keys)) {
           const keyMap = new Map((this.data.api_keys || []).map((k) => [k.id, k]));
@@ -161,14 +166,10 @@ class Database {
 
     const performSave = () => {
       try {
-        // Strip sensitive credentials so secrets are never written to disk
+        // Persist all settings (including session_string) so the user never has to re-login.
+        // telecloud_db.json is stored safely in DATA_DIR and ignored by Git.
         const sanitized = JSON.parse(JSON.stringify(data));
         if (sanitized.settings) {
-          delete sanitized.settings.session_string;
-          delete sanitized.settings.bot_token;
-          delete sanitized.settings.api_id;
-          delete sanitized.settings.api_hash;
-          delete sanitized.settings.phone_number;
           delete sanitized.settings.phone_code_hash;
         }
 
@@ -190,17 +191,66 @@ class Database {
 
   // --- Settings ---
   async getSetting(key) {
-    if (key === 'api_id') return process.env.TELEGRAM_API_ID || this.data.settings?.api_id || null;
-    if (key === 'api_hash') return process.env.TELEGRAM_API_HASH || this.data.settings?.api_hash || null;
-    if (key === 'session_string') return process.env.TELEGRAM_SESSION_STRING || this.data.settings?.session_string || null;
-    if (key === 'bot_token') return process.env.TELEGRAM_BOT_TOKEN || this.data.settings?.bot_token || null;
-    if (key === 'auth_type') return process.env.TELEGRAM_AUTH_TYPE || this.data.settings?.auth_type || 'saved_messages';
+    const isManualDisconnected = this.data.settings?.manual_disconnect === true;
+
+    if (key === 'manual_disconnect') {
+      return isManualDisconnected;
+    }
+
+    if (key === 'session_string') {
+      if (isManualDisconnected) return '';
+      return this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || null;
+    }
+
+    if (key === 'auth_type') {
+      if (isManualDisconnected) return 'demo';
+      return this.data.settings?.auth_type || process.env.TELEGRAM_AUTH_TYPE || 'saved_messages';
+    }
+
+    if (key === 'api_id') {
+      return this.data.settings?.api_id || process.env.TELEGRAM_API_ID || null;
+    }
+
+    if (key === 'api_hash') {
+      return this.data.settings?.api_hash || process.env.TELEGRAM_API_HASH || null;
+    }
+
+    if (key === 'bot_token') {
+      if (isManualDisconnected) return '';
+      return this.data.settings?.bot_token || process.env.TELEGRAM_BOT_TOKEN || null;
+    }
+
     return this.data.settings?.[key] || null;
   }
 
   async setSetting(key, value) {
     if (!this.data.settings) this.data.settings = {};
     this.data.settings[key] = value;
+
+    if (key === 'session_string') {
+      if (value) {
+        this.data.settings.manual_disconnect = false;
+        this.data.settings.auth_type = 'saved_messages';
+        updateEnvFile({
+          TELEGRAM_SESSION_STRING: value,
+          TELEGRAM_AUTH_TYPE: 'saved_messages',
+        });
+      }
+    } else if (key === 'manual_disconnect') {
+      if (value === true) {
+        this.data.settings.session_string = '';
+        this.data.settings.auth_type = 'demo';
+        updateEnvFile({
+          TELEGRAM_SESSION_STRING: '',
+          TELEGRAM_AUTH_TYPE: 'demo',
+        });
+      }
+    } else if (key === 'api_id' && value) {
+      updateEnvFile({ TELEGRAM_API_ID: value });
+    } else if (key === 'api_hash' && value) {
+      updateEnvFile({ TELEGRAM_API_HASH: value });
+    }
+
     this.saveData(this.data, true);
     cloudDbService.saveSettings(this.data.settings).catch(() => {});
     return value;
@@ -210,13 +260,15 @@ class Database {
     if (!this.data.settings || Date.now() - this.lastCloudSync > 60000) {
       await this.syncFromCloud();
     }
+    const isManualDisconnected = this.data.settings?.manual_disconnect === true;
     return {
       ...this.data.settings,
-      auth_type: process.env.TELEGRAM_AUTH_TYPE || this.data.settings?.auth_type || 'saved_messages',
-      api_id: process.env.TELEGRAM_API_ID || this.data.settings?.api_id || '',
-      api_hash: process.env.TELEGRAM_API_HASH || this.data.settings?.api_hash || '',
-      session_string: process.env.TELEGRAM_SESSION_STRING || this.data.settings?.session_string || '',
-      bot_token: process.env.TELEGRAM_BOT_TOKEN || this.data.settings?.bot_token || '',
+      manual_disconnect: isManualDisconnected,
+      auth_type: isManualDisconnected ? 'demo' : (this.data.settings?.auth_type || process.env.TELEGRAM_AUTH_TYPE || 'saved_messages'),
+      api_id: this.data.settings?.api_id || process.env.TELEGRAM_API_ID || '',
+      api_hash: this.data.settings?.api_hash || process.env.TELEGRAM_API_HASH || '',
+      session_string: isManualDisconnected ? '' : (this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || ''),
+      bot_token: isManualDisconnected ? '' : (this.data.settings?.bot_token || process.env.TELEGRAM_BOT_TOKEN || ''),
     };
   }
 

@@ -33,15 +33,22 @@ class TelegramService {
    */
   async init() {
     try {
+      const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+      if (isManualDisconnected) {
+        this.client = null;
+        this.authType = 'demo';
+        return;
+      }
+
       this.authType = 'saved_messages';
 
-      const apiId = parseInt(process.env.TELEGRAM_API_ID || (await getSetting('api_id')));
-      const apiHash = process.env.TELEGRAM_API_HASH || (await getSetting('api_hash'));
-      const sessionString = process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')) || '';
+      const apiId = parseInt(await getSetting('api_id'));
+      const apiHash = await getSetting('api_hash');
+      const sessionString = (await getSetting('session_string')) || '';
 
       if (apiId && apiHash && sessionString) {
-        const stringSession = new StringSession(sessionString);
-        this.client = new TelegramClient(stringSession, apiId, apiHash, {
+        const stringSession = new StringSession(sessionString.trim());
+        this.client = new TelegramClient(stringSession, apiId, apiHash.trim(), {
           connectionRetries: 5,
           useWSS: false,
         });
@@ -68,6 +75,13 @@ class TelegramService {
    * Lazily ensures TelegramClient is connected (essential for Vercel / serverless runtimes)
    */
   async ensureClient() {
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    if (isManualDisconnected) {
+      this.client = null;
+      this.authType = 'demo';
+      return null;
+    }
+
     if (this.client) {
       try {
         if (this.client.connected) {
@@ -178,13 +192,18 @@ class TelegramService {
    * Get current connection status and details (without leaking secrets)
    */
   async getStatus() {
-    await this.ensureClient();
-    const apiId = process.env.TELEGRAM_API_ID || (await getSetting('api_id'));
-    const hasSession = !!(process.env.TELEGRAM_SESSION_STRING || (await getSetting('session_string')));
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    if (!isManualDisconnected) {
+      await this.ensureClient();
+    }
+
+    const apiId = await getSetting('api_id');
+    const sessionString = await getSetting('session_string');
+    const hasSession = !!sessionString && !isManualDisconnected;
 
     let userDetails = null;
 
-    if (this.client) {
+    if (this.client && !isManualDisconnected) {
       try {
         const me = await this.client.getMe();
         if (me) {
@@ -208,7 +227,7 @@ class TelegramService {
       authType: userDetails ? 'saved_messages' : 'demo',
       configuredType: 'saved_messages',
       user: userDetails || {
-        firstName: 'Guest User',
+        firstName: isManualDisconnected ? 'Disconnected' : 'Guest User',
         username: '',
         target: 'Saved Messages (Offline / Sandbox)',
       },
@@ -216,6 +235,7 @@ class TelegramService {
         hasApiId: !!apiId,
         hasSession,
       },
+      manualDisconnect: isManualDisconnected,
     };
   }
 
@@ -312,6 +332,7 @@ class TelegramService {
     }
 
     const sessionString = client.session.save();
+    await setSetting('manual_disconnect', false);
     await setSetting('session_string', sessionString);
     await setSetting('auth_type', 'saved_messages');
     await setSetting('chat_id', 'me');
@@ -355,6 +376,7 @@ class TelegramService {
       throw new Error('Invalid or expired Telegram Session String.');
     }
 
+    await setSetting('manual_disconnect', false);
     await setSetting('api_id', cleanApiId.toString());
     await setSetting('api_hash', apiHash.trim());
     await setSetting('session_string', sessionString.trim());
@@ -390,10 +412,16 @@ class TelegramService {
       this.client = null;
     }
 
+    this.listenerAttached = false;
+    this.authType = 'demo';
+
+    await setSetting('manual_disconnect', true);
     await setSetting('session_string', '');
     await setSetting('auth_type', 'demo');
-    this.authType = 'demo';
-    this.listenerAttached = false;
+
+    // Clear from in-memory process.env so it cannot resurrect
+    delete process.env.TELEGRAM_SESSION_STRING;
+    process.env.TELEGRAM_AUTH_TYPE = 'demo';
 
     return { success: true };
   }
