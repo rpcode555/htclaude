@@ -39,22 +39,25 @@ export function AuthProvider({ children }) {
         },
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.user?.isAdmin) {
-          setCurrentUser(user);
-          setIsAdmin(true);
-          setAuthError('');
-          return true;
-        }
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {}
+
+      if (res.ok && data?.success && data?.user?.isAdmin) {
+        setCurrentUser(user);
+        setIsAdmin(true);
+        setAuthError('');
+        return true;
       }
 
       // Not authorized as admin
-      console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email}`);
+      const errorMsg = data?.error || `Access Denied: Account (${user.email}) is not authorized. Only the verified administrator can access this storage.`;
+      console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
       await signOut(auth);
       setCurrentUser(null);
       setIsAdmin(false);
-      setAuthError(`Access Denied: Account (${user.email}) is not authorized. Only the verified administrator can access this storage.`);
+      setAuthError(errorMsg);
       return false;
     } catch (err) {
       console.error('[Auth Error] Failed to verify credentials with server:', err);

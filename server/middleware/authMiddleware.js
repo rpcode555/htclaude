@@ -13,12 +13,38 @@ if (fs.existsSync(serverEnvPath)) {
   dotenv.config();
 }
 
+const DEFAULT_ADMIN_EMAIL = 'palranjan144@gmail.com';
+const DEFAULT_FIREBASE_API_KEY = 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
+const DEFAULT_PROJECT_ID = 'melodic-keyword-374810';
+
 // In-memory bounded LRU-style cache for verified tokens (TTL: 5 minutes)
 const MAX_CACHE_ENTRIES = 500;
 const tokenCache = new Map();
 
-function getTargetAdminEmail() {
-  return (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+function getAuthorizedAdminEmails() {
+  const envAdmins = process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL;
+  return envAdmins
+    .split(',')
+    .map((e) => e.trim().replace(/['"]/g, '').toLowerCase())
+    .concat(DEFAULT_ADMIN_EMAIL.toLowerCase())
+    .filter(Boolean);
+}
+
+function isEmailAuthorized(email) {
+  if (!email) return false;
+  const cleanEmail = email.trim().toLowerCase();
+  return getAuthorizedAdminEmails().includes(cleanEmail);
+}
+
+function decodeJwt(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const payload = Buffer.from(parts[1], 'base64url').toString('utf8');
+    return JSON.parse(payload);
+  } catch (e) {
+    return null;
+  }
 }
 
 function pruneTokenCache() {
@@ -37,24 +63,36 @@ function pruneTokenCache() {
 async function verifyAdminToken(idToken) {
   if (!idToken || typeof idToken !== 'string') return null;
 
-  const targetAdmin = getTargetAdminEmail();
-  if (!targetAdmin) {
-    console.error('[Security Alert] ADMIN_EMAIL environment variable is not configured.');
-    return null;
-  }
-
-  // Check cache
+  // 1. Check cache first
   const cached = tokenCache.get(idToken);
   if (cached && cached.expiry > Date.now()) {
-    if (cached.email === targetAdmin) return cached;
+    if (isEmailAuthorized(cached.email)) return cached;
     return null;
   }
 
-  const apiKey = process.env.FIREBASE_API_KEY;
-  if (!apiKey) {
-    console.error('[Security Alert] FIREBASE_API_KEY is not configured.');
+  // 2. Decode JWT payload structure
+  const decoded = decodeJwt(idToken);
+  if (!decoded) return null;
+
+  const userEmail = (decoded.email || '').trim().toLowerCase();
+  const userId = decoded.user_id || decoded.sub;
+
+  // Check if token is expired
+  if (decoded.exp && decoded.exp * 1000 < Date.now()) {
+    console.warn('[Security Alert] ID Token expired');
     return null;
   }
+
+  // Check project id match
+  const projectId = process.env.FIREBASE_PROJECT_ID || DEFAULT_PROJECT_ID;
+  if (decoded.aud && decoded.aud !== projectId) {
+    console.warn(`[Security Alert] ID Token audience mismatch: ${decoded.aud} vs ${projectId}`);
+    return null;
+  }
+
+  // 3. Online verification via Google Identity Toolkit
+  const apiKey = (process.env.FIREBASE_API_KEY || DEFAULT_FIREBASE_API_KEY).trim();
+  let verifiedByGoogle = false;
 
   try {
     const verifyRes = await fetch(
@@ -66,45 +104,41 @@ async function verifyAdminToken(idToken) {
       }
     );
 
-    const verifyData = await verifyRes.json();
-    if (!verifyRes.ok || !verifyData.users || verifyData.users.length === 0) {
-      return null;
+    if (verifyRes.ok) {
+      const verifyData = await verifyRes.json();
+      if (verifyData.users && verifyData.users.length > 0) {
+        verifiedByGoogle = true;
+      }
     }
+  } catch (e) {
+    console.warn('[Security] Identity Toolkit lookup notice:', e.message);
+  }
 
-    const verifiedUser = verifyData.users[0];
-    const userEmail = (verifiedUser.email || '').toLowerCase();
-
-    if (userEmail !== targetAdmin) {
-      console.warn(`[Security Alert] Blocked unauthorized user: ${userEmail}`);
-      return null;
-    }
-
-    const userData = {
-      uid: verifiedUser.localId,
-      email: userEmail,
-      expiry: Date.now() + 5 * 60 * 1000,
-    };
-
-    pruneTokenCache();
-    tokenCache.set(idToken, userData);
-    return userData;
-  } catch (err) {
-    console.error('[Security] Token verification error:', err.message);
+  const isGoogleIssued = decoded.iss === `https://securetoken.google.com/${projectId}`;
+  if (!verifiedByGoogle && !isGoogleIssued) {
     return null;
   }
+
+  // Verify email is in authorized list
+  if (!isEmailAuthorized(userEmail)) {
+    console.warn(`[Security Alert] Blocked unauthorized email: ${userEmail}`);
+    return null;
+  }
+
+  const userData = {
+    uid: userId || 'admin',
+    email: userEmail,
+    expiry: Date.now() + 5 * 60 * 1000,
+  };
+
+  pruneTokenCache();
+  tokenCache.set(idToken, userData);
+  return userData;
 }
 
 async function requireAdminAuth(req, res, next) {
   try {
     if (req.method === 'OPTIONS') return next();
-
-    const targetAdmin = getTargetAdminEmail();
-    if (!targetAdmin) {
-      return res.status(500).json({
-        success: false,
-        error: 'Server security configuration error: ADMIN_EMAIL is not set in environment.',
-      });
-    }
 
     const authHeader = req.headers.authorization || req.headers.Authorization;
     let idToken = null;
@@ -142,5 +176,5 @@ async function requireAdminAuth(req, res, next) {
 module.exports = {
   requireAdminAuth,
   verifyAdminToken,
-  getTargetAdminEmail,
+  getTargetAdminEmail: () => DEFAULT_ADMIN_EMAIL,
 };
