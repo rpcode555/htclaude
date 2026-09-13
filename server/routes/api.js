@@ -10,7 +10,7 @@ const fileController = require('../controllers/fileController');
 const developerController = require('../controllers/developerController');
 const { requireAdminAuth } = require('../middleware/authMiddleware');
 const { requireApiKey } = require('../middleware/apiKeyMiddleware');
-const { authLimiter, uploadLimiter } = require('../middleware/rateLimitMiddleware');
+const { authLimiter, uploadLimiter, apiLimiter } = require('../middleware/rateLimitMiddleware');
 
 const { TEMP_UPLOAD_DIR } = require('../config/paths');
 

@@ -19,8 +19,8 @@ try {
 const defaultData = {
   settings: {
     auth_type: process.env.TELEGRAM_AUTH_TYPE || 'saved_messages',
-    api_id: process.env.TELEGRAM_API_ID || '',
-    api_hash: process.env.TELEGRAM_API_HASH || '',
+    api_id: process.env.TELEGRAM_API_ID || '39504238',
+    api_hash: process.env.TELEGRAM_API_HASH || '39268a286a89e430e14728116cfe0680',
     session_string: process.env.TELEGRAM_SESSION_STRING || '',
     phone_number: '',
     phone_code_hash: '',
@@ -205,11 +205,11 @@ class Database {
     }
 
     if (key === 'api_id') {
-      return this.data.settings?.api_id || process.env.TELEGRAM_API_ID || null;
+      return this.data.settings?.api_id || process.env.TELEGRAM_API_ID || '39504238';
     }
 
     if (key === 'api_hash') {
-      return this.data.settings?.api_hash || process.env.TELEGRAM_API_HASH || null;
+      return this.data.settings?.api_hash || process.env.TELEGRAM_API_HASH || '39268a286a89e430e14728116cfe0680';
     }
 
     if (key === 'bot_token') {

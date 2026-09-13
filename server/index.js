@@ -109,8 +109,8 @@ app.use((req, res) => {
   }
 });
 
-// Start Server if run directly
-if (process.env.NODE_ENV !== 'production' || require.main === module) {
+// Start Server if run directly (Local development / dedicated server)
+if (require.main === module && !process.env.VERCEL) {
   const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`=========================================`);
     console.log(`🔒 Hightech Claude Server: http://localhost:${PORT}`);

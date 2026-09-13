@@ -13,18 +13,45 @@ async function getAuthHeader() {
   return {};
 }
 
+async function safeJson(res) {
+  try {
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (!res.ok) {
+        // Strip HTML tags if HTML error page was returned
+        const cleanText = text.replace(/<[^>]*>?/gm, '').trim();
+        return {
+          success: false,
+          error: `Server error (${res.status}): ${cleanText.slice(0, 150) || res.statusText || 'Internal server error'}`,
+        };
+      }
+      return {
+        success: false,
+        error: text.slice(0, 150) || 'Unexpected non-JSON response from server',
+      };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message || 'Network request failed',
+    };
+  }
+}
+
 export const api = {
   // --- Developer API Keys Management ---
   async getApiKeys() {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/developer/keys`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async getApiKeyFiles(keyId) {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/developer/keys/${keyId}/files`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async createApiKey(payload) {
@@ -35,7 +62,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(bodyData),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async updateApiKey(id, updates) {
@@ -45,7 +72,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async deleteApiKey(id) {
@@ -54,14 +81,14 @@ export const api = {
       method: 'DELETE',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   // --- Auth & Telegram Connection ---
   async getStatus() {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/auth/status`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async sendPhoneCode(phoneNumber, apiId = null, apiHash = null) {
@@ -80,7 +107,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async verifyPhoneCode(code, password, phoneCodeHash = null, phoneNumber = null, tempSession = null) {
@@ -90,7 +117,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, password, phoneCodeHash, phoneNumber, tempSession }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async getQrCode(apiId = null, apiHash = null) {
@@ -100,7 +127,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiId, apiHash }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async checkQrCode(tempSession, password = '', apiId = null, apiHash = null) {
@@ -110,7 +137,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ tempSession, password, apiId, apiHash }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async connectSessionString(sessionString, apiId = null, apiHash = null) {
@@ -133,7 +160,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async backupDatabase() {
@@ -142,7 +169,7 @@ export const api = {
       method: 'POST',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async disconnect() {
@@ -151,7 +178,7 @@ export const api = {
       method: 'POST',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async updateSettings(settings) {
@@ -161,14 +188,14 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   // --- Folders ---
   async getFolders() {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/folders`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async createFolder(name, parent_id = null, color = '#3b82f6', icon = 'folder') {
@@ -178,7 +205,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, parent_id, color, icon }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async updateFolder(id, updates) {
@@ -188,7 +215,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async deleteFolder(id, permanent = false) {
@@ -197,7 +224,7 @@ export const api = {
       method: 'DELETE',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async restoreFolder(id) {
@@ -206,7 +233,7 @@ export const api = {
       method: 'POST',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   // --- Files ---
@@ -221,13 +248,13 @@ export const api = {
     if (sortOrder) params.append('sortOrder', sortOrder);
 
     const res = await fetch(`${API_BASE}/files?${params.toString()}`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async getFile(id) {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/files/${id}`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async createNoteFile({ name, content, folder_id }) {
@@ -237,7 +264,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, content, folder_id }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async updateFileContent(id, content) {
@@ -247,12 +274,12 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async getSharedFileInfo(id) {
     const res = await fetch(`${API_BASE}/v1/share/${id}`);
-    return await res.json();
+    return await safeJson(res);
   },
 
   async uploadSingleFile(file, folder_id, onProgress) {
@@ -372,7 +399,7 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async trashFile(id) {
@@ -381,7 +408,7 @@ export const api = {
       method: 'DELETE',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async restoreFile(id) {
@@ -390,7 +417,7 @@ export const api = {
       method: 'POST',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async deleteFile(id) {
@@ -399,7 +426,7 @@ export const api = {
       method: 'DELETE',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async emptyTrash() {
@@ -408,7 +435,7 @@ export const api = {
       method: 'DELETE',
       headers,
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   async batchAction(action, fileIds, targetFolderId = null) {
@@ -418,13 +445,13 @@ export const api = {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, fileIds, targetFolderId }),
     });
-    return await res.json();
+    return await safeJson(res);
   },
 
   // --- Stats ---
   async getStats() {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/stats`, { headers });
-    return await res.json();
+    return await safeJson(res);
   },
 };
