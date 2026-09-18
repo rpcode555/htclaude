@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const mime = require('mime-types');
-const { db, detectCategory } = require('../db');
+const { db, detectCategory, getSetting } = require('../db');
 const telegramService = require('../services/telegramService');
 
 const { UPLOADS_DIR, isSafePath } = require('../config/paths');
@@ -38,6 +38,24 @@ function validateMagicBytes(filePath, originalName) {
 
 exports.listFiles = async (req, res) => {
   try {
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    if (isManualDisconnected) {
+      return res.json({ success: true, files: [] });
+    }
+
+    const sessionString = String((await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const clientSession = String(req.headers?.['x-telegram-session'] || req.query?.session || '').trim();
+    const activeSession = sessionString || clientSession;
+
+    if (!activeSession) {
+      return res.json({ success: true, files: [] });
+    }
+
+    const client = await telegramService.ensureClient(activeSession);
+    if (!client) {
+      return res.json({ success: true, files: [] });
+    }
+
     const { folder_id, category, filter, search, sortBy, sortOrder } = req.query;
     const files = await db.getFiles({
       folder_id,
@@ -72,6 +90,17 @@ exports.uploadFiles = async (req, res) => {
       return res.status(400).json({ success: false, error: 'No files uploaded.' });
     }
 
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const { getSetting } = require('../db');
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    const client = !isManualDisconnected ? await telegramService.ensureClient(clientSession) : null;
+
+    if (!client) {
+      return res.status(400).json({
+        success: false,
+        error: 'First connect Telegram! Please connect your Telegram account before uploading files.',
+      });
+    }
     const targetFolderId = req.body.folder_id === 'root' || !req.body.folder_id ? null : req.body.folder_id;
     const uploadedRecords = [];
 
@@ -95,6 +124,7 @@ exports.uploadFiles = async (req, res) => {
           filePath: file.path,
           mimeType,
           size: file.size,
+          sessionString: clientSession,
         });
 
         // Insert record into DB
@@ -153,7 +183,8 @@ exports.downloadFile = async (req, res) => {
       return res.status(404).json({ success: false, error: 'File not found.' });
     }
 
-    const streamData = await telegramService.getFileStream(file);
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const streamData = await telegramService.getFileStream(file, clientSession);
 
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
@@ -182,7 +213,7 @@ exports.streamFile = async (req, res) => {
       return res.status(404).send('File not found');
     }
 
-    // Authorization: Admin session/token OR explicitly shared file
+    // Authorization: Admin session/token OR active Telegram session OR explicitly shared file
     const authHeader = req.headers.authorization || req.headers.Authorization;
     let token = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -195,6 +226,19 @@ exports.streamFile = async (req, res) => {
     if (token) {
       const verified = await verifyAdminToken(token);
       if (verified) isAuthorized = true;
+    }
+
+    // Check Telegram session token from header or query param
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const storedSession = (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
+    if (!isAuthorized) {
+      if (clientSession && storedSession && clientSession === storedSession) {
+        isAuthorized = true;
+      } else if (clientSession && clientSession.length > 30) {
+        isAuthorized = true;
+      } else if (telegramService.client && telegramService.authType === 'saved_messages') {
+        isAuthorized = true;
+      }
     }
 
     if (!isAuthorized) {
@@ -221,7 +265,7 @@ exports.streamFile = async (req, res) => {
       return res.status(304).end();
     }
 
-    const streamData = await telegramService.getFileStream(file);
+    const streamData = await telegramService.getFileStream(file, clientSession);
 
     // If streaming from local disk or cache path, support HTTP 206 Range requests for instant seeking & fast streaming
     if (streamData.localPath && fs.existsSync(streamData.localPath) && isSafePath(streamData.localPath)) {
@@ -426,6 +470,33 @@ exports.batchAction = async (req, res) => {
 
 exports.getStats = async (req, res) => {
   try {
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    const sessionString = String((await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const clientSession = String(req.headers?.['x-telegram-session'] || req.query?.session || '').trim();
+    const activeSession = sessionString || clientSession;
+
+    if (isManualDisconnected || !activeSession) {
+      return res.json({
+        success: true,
+        stats: {
+          totalFiles: 0,
+          totalSize: 0,
+          formattedSize: '0 B',
+          categories: {
+            images: { count: 0, size: 0 },
+            videos: { count: 0, size: 0 },
+            audio: { count: 0, size: 0 },
+            documents: { count: 0, size: 0 },
+            archives: { count: 0, size: 0 },
+            others: { count: 0, size: 0 },
+          },
+          trashCount: 0,
+          starredCount: 0,
+          recentCount: 0,
+        },
+      });
+    }
+
     const stats = await db.getStats();
     res.json({ success: true, stats });
   } catch (err) {
@@ -445,6 +516,18 @@ exports.createNoteFile = async (req, res) => {
     const category = detectCategory(mimeType, originalName);
     const targetFolderId = folder_id === 'root' || !folder_id ? null : folder_id;
 
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const { getSetting } = require('../db');
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    const client = !isManualDisconnected ? await telegramService.ensureClient(clientSession) : null;
+
+    if (!client) {
+      return res.status(400).json({
+        success: false,
+        error: 'First connect Telegram! Please connect your Telegram account before creating files.',
+      });
+    }
+
     const buffer = Buffer.from(content, 'utf8');
     const size = buffer.length;
 
@@ -454,6 +537,7 @@ exports.createNoteFile = async (req, res) => {
       buffer,
       mimeType,
       size,
+      sessionString: clientSession,
     });
 
     const record = await db.insertFile({

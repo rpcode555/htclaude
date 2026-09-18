@@ -75,7 +75,7 @@ module.exports = {
   createRateLimiter,
   authLimiter: createRateLimiter({
     windowMs: 60 * 1000,
-    maxRequests: 30,
+    maxRequests: 150,
     message: 'Too many authentication attempts. Please wait 1 minute before trying again.',
   }),
   uploadLimiter: createRateLimiter({

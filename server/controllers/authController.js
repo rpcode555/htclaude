@@ -6,17 +6,30 @@ exports.getStatus = async (req, res) => {
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
 
-    // Auto-reconnect with client session if serverless container is fresh / stateless
-    if (clientSession && !isManualDisconnected) {
-      const currentStatus = await telegramService.getStatus();
-      if (!currentStatus.connected) {
-        try {
-          const apiId = await getSetting('api_id');
-          const apiHash = await getSetting('api_hash');
-          await telegramService.connectSessionString(apiId, apiHash, clientSession);
-        } catch (e) {
-          console.warn('[Auth] Auto-reconnect with client session notice:', e.message);
+    // Check if client is already connected and authorized
+    let isCurrentlyConnected = false;
+    if (telegramService.client && !isManualDisconnected) {
+      try {
+        if (!telegramService.client.connected) {
+          await telegramService.client.connect();
         }
+        isCurrentlyConnected = await telegramService.client.checkAuthorization();
+      } catch (e) {
+        isCurrentlyConnected = false;
+      }
+    }
+
+    // Only reconnect if NOT currently connected AND client session is available AND not manually disconnected
+    if (!isCurrentlyConnected && clientSession && !isManualDisconnected) {
+      try {
+        const apiId = await getSetting('api_id');
+        const apiHash = await getSetting('api_hash');
+
+        if (apiId && apiHash) {
+          await telegramService.connectSessionString(apiId, apiHash, clientSession);
+        }
+      } catch (e) {
+        console.warn('[Auth] Auto-reconnect with client session notice:', e.message);
       }
     }
 
@@ -27,9 +40,9 @@ exports.getStatus = async (req, res) => {
     // Redact sensitive keys
     const safeSettings = {
       auth_type: status.authType,
-      api_id: settings.api_id ? '******' + settings.api_id.slice(-3) : '',
-      phone_number: settings.phone_number ? '******' + settings.phone_number.slice(-4) : '',
-      has_session: !!(process.env.TELEGRAM_SESSION_STRING || settings.session_string || clientSession),
+      api_id: settings.api_id ? '******' + String(settings.api_id).slice(-3) : '',
+      phone_number: settings.phone_number ? '******' + String(settings.phone_number).slice(-4) : '',
+      has_session: !!(status.sessionString || settings.session_string || clientSession),
       chat_id: 'me',
       auto_backup: settings.auto_backup || '1',
     };
@@ -37,7 +50,7 @@ exports.getStatus = async (req, res) => {
     res.json({
       success: true,
       ...status,
-      sessionString: status.connected ? activeSession : '',
+      sessionString: status.connected ? (status.sessionString || activeSession) : '',
       settings: safeSettings,
     });
   } catch (err) {

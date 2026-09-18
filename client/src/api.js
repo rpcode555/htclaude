@@ -109,9 +109,9 @@ export const api = {
     let body = {};
     if (typeof phoneNumber === 'object' && phoneNumber !== null) {
       body = phoneNumber;
-    } else if (apiHash && !phoneNumber.startsWith('+') && isNaN(Number(phoneNumber)) && !isNaN(Number(phoneNumber))) {
+    } else if (apiHash && !String(phoneNumber).startsWith('+') && isNaN(Number(apiId)) && !isNaN(Number(phoneNumber))) {
       // backward compatibility if (apiId, apiHash, phoneNumber)
-      body = { apiId: phoneNumber, apiHash, phoneNumber: apiId };
+      body = { apiId: phoneNumber, apiHash: apiId, phoneNumber: apiHash };
     } else {
       body = { phoneNumber, apiId, apiHash };
     }
@@ -314,11 +314,9 @@ export const api = {
     try {
       if (auth.currentUser) {
         token = await auth.currentUser.getIdToken();
-      } else {
-        token = localStorage.getItem('admin_token') || '';
       }
     } catch (e) {
-      token = localStorage.getItem('admin_token') || '';
+      // Token will remain empty if auth fails
     }
 
     return new Promise((resolve, reject) => {
@@ -415,16 +413,22 @@ export const api = {
     };
   },
 
-  getDownloadUrl(fileId) {
+  getDownloadUrl(fileId, token = null) {
+    const params = new URLSearchParams();
     const tgSession = localStorage.getItem('htc_tg_session');
-    const param = tgSession ? `?session=${encodeURIComponent(tgSession)}` : '';
-    return `${API_BASE}/files/${fileId}/download${param}`;
+    if (tgSession) params.append('session', tgSession);
+    if (token) params.append('token', token);
+    const qs = params.toString();
+    return `${API_BASE}/files/${fileId}/download${qs ? `?${qs}` : ''}`;
   },
 
-  getStreamUrl(fileId) {
+  getStreamUrl(fileId, token = null) {
+    const params = new URLSearchParams();
     const tgSession = localStorage.getItem('htc_tg_session');
-    const param = tgSession ? `?session=${encodeURIComponent(tgSession)}` : '';
-    return `${API_BASE}/files/${fileId}/stream${param}`;
+    if (tgSession) params.append('session', tgSession);
+    if (token) params.append('token', token);
+    const qs = params.toString();
+    return `${API_BASE}/files/${fileId}/stream${qs ? `?${qs}` : ''}`;
   },
 
   async updateFile(id, updates) {

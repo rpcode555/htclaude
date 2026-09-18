@@ -2,20 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Send,
-  Cloud,
-  Shield,
-  Key,
   Smartphone,
   QrCode,
-  Lock,
   CheckCircle2,
   AlertTriangle,
-  ExternalLink,
-  Trash2,
   RefreshCw,
-  Server,
-  Info,
-  ShieldCheck,
   Moon,
   Sun,
   Palette,
@@ -28,11 +19,11 @@ import { useTheme } from '../context/ThemeContext';
 
 export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) {
   const confirm = useConfirm();
-  const { theme, isDark, toggleTheme } = useTheme();
+  const { isDark, toggleTheme } = useTheme();
   const [activeTab, setActiveTab] = useState('saved_messages');
 
   // MTProto Form State
-  const [loginMethod, setLoginMethod] = useState('qr'); // 'qr' | 'phone' | 'session'
+  const [loginMethod, setLoginMethod] = useState('phone'); // 'phone' | 'qr' | 'session'
   const [phoneNumber, setPhoneNumber] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -46,6 +37,12 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   const [phoneCodeHash, setPhoneCodeHash] = useState('');
   const [tempSession, setTempSession] = useState('');
   const [requires2FA, setRequires2FA] = useState(false);
+
+  // Status & Feedback
+  const [loading, setLoading] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   // QR Login State
   const [qrLoading, setQrLoading] = useState(false);
@@ -64,6 +61,15 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     if (qrPollingRef.current) {
       clearInterval(qrPollingRef.current);
       qrPollingRef.current = null;
+    }
+  };
+
+  const handleSelectLoginMethod = (method) => {
+    setLoginMethod(method);
+    setErrorMsg('');
+    setSuccessMsg('');
+    if (method !== 'qr') {
+      stopQrPolling();
     }
   };
 
@@ -169,12 +175,6 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     }
     return () => stopQrPolling();
   }, [loginMethod, activeTab, authStatus?.connected]);
-
-  // Status & Feedback
-  const [loading, setLoading] = useState(false);
-  const [backingUp, setBackingUp] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
 
   // 1. Send Phone Code Handler
   const handleSendCode = async (e) => {
@@ -506,19 +506,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                   <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl text-xs font-semibold">
                     <button
                       type="button"
-                      onClick={() => { setLoginMethod('qr'); setErrorMsg(''); }}
-                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                        loginMethod === 'qr'
-                          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
-                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                      }`}
-                    >
-                      <QrCode className="w-3.5 h-3.5" />
-                      <span>QR Code</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setLoginMethod('phone'); setErrorMsg(''); }}
+                      onClick={() => handleSelectLoginMethod('phone')}
                       className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                         loginMethod === 'phone'
                           ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
@@ -530,7 +518,19 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setLoginMethod('session'); setErrorMsg(''); }}
+                      onClick={() => handleSelectLoginMethod('qr')}
+                      className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        loginMethod === 'qr'
+                          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>QR Code</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectLoginMethod('session')}
                       className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                         loginMethod === 'session'
                           ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-xs'

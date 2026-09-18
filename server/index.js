@@ -22,6 +22,12 @@ const { apiLimiter } = require('./middleware/rateLimitMiddleware');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Handle transient GramJS socket reconnect timeouts gracefully
+process.on('unhandledRejection', (reason) => {
+  if (reason && (reason.message === 'TIMEOUT' || String(reason).includes('TIMEOUT'))) return;
+  console.warn('[Server Warning] Unhandled Rejection:', reason?.message || reason);
+});
+
 // Security Headers Middleware
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');

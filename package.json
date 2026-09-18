@@ -5,11 +5,11 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "server": "node server/index.js",
+    "server": "nodemon server/index.js",
     "client": "npm run dev --prefix client",
     "build": "npm run build --prefix client",
     "build:client": "npm run build --prefix client",
-    "dev": "concurrently \"node server/index.js\" \"npm run dev --prefix client\"",
+    "dev": "concurrently \"nodemon server/index.js\" \"npm run dev --prefix client\"",
     "postinstall": "npm install --prefix client"
   },
   "dependencies": {

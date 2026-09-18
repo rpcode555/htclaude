@@ -71,7 +71,7 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash, o
 
     async function initStreamUrl() {
       const token = currentUser ? await currentUser.getIdToken() : '';
-      const url = `${api.getStreamUrl(file.id)}?token=${encodeURIComponent(token)}`;
+      const url = api.getStreamUrl(file.id, token);
       if (isMounted) {
         setStreamUrl(url);
       }

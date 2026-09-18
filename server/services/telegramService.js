@@ -27,55 +27,86 @@ class TelegramService {
     this.tempPhoneNumber = null;
     this.listenerAttached = false;
     this._initPromise = null;
+    this._hasLoggedNoSession = false;
   }
 
   /**
    * Initializes the Telegram MTProto client for Saved Messages using stored session
    */
-  async init() {
+  async init(explicitSession = null) {
     try {
       const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
       if (isManualDisconnected) {
-        this.client = null;
+        if (this.client) {
+          try { await this.client.disconnect(); } catch (e) {}
+          this.client = null;
+        }
         this.authType = 'demo';
         return;
       }
 
       this.authType = 'saved_messages';
 
-      const apiId = parseInt(await getSetting('api_id'));
-      const apiHash = await getSetting('api_hash');
-      const sessionString = (await getSetting('session_string')) || '';
+      const apiId = parseInt(await getSetting('api_id')) || 39504238;
+      const apiHash = (await getSetting('api_hash')) || '39268a286a89e430e14728116cfe0680';
+      const rawSession = explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
+      const sessionString = String(rawSession).trim();
 
       if (apiId && apiHash && sessionString) {
-        const stringSession = new StringSession(sessionString.trim());
-        this.client = new TelegramClient(stringSession, apiId, apiHash.trim(), {
+        // If client already exists and is authorized with the same session, keep it!
+        if (this.client) {
+          try {
+            if (!this.client.connected) {
+              await this.client.connect();
+            }
+            const isAuth = await this.client.checkAuthorization();
+            if (isAuth) {
+              const currentSession = this.client.session?.save?.() || '';
+              if (currentSession === sessionString) {
+                return;
+              }
+            }
+          } catch (e) {}
+          // Session is different or disconnected; cleanly disconnect old client first
+          try { await this.client.disconnect(); } catch (e) {}
+          this.client = null;
+        }
+
+        const stringSession = new StringSession(sessionString);
+        const client = new TelegramClient(stringSession, apiId, String(apiHash).trim(), {
           connectionRetries: 5,
           useWSS: false,
         });
 
-        await this.client.connect();
-        const isAuth = await this.client.checkAuthorization();
+        await client.connect();
+        const isAuth = await client.checkAuthorization();
         if (isAuth) {
+          this.client = client;
+          this._hasLoggedNoSession = false;
           const me = await this.client.getMe();
           console.log(`[Telegram] Connected to Telegram Saved Messages as ${me.firstName || 'User'} (@${me.username || me.id})`);
           this.setupSavedMessagesListener();
         } else {
           console.warn('[Telegram] Session string is invalid or expired.');
+          try { await client.disconnect(); } catch (e) {}
           this.client = null;
         }
       } else {
-        console.log('[Telegram] No saved session found. Storage running in Sandbox/Demo mode until Telegram account is linked.');
+        if (!this._hasLoggedNoSession) {
+          console.log('[Telegram] Storage running in Sandbox/Demo mode until Telegram account is linked.');
+          this._hasLoggedNoSession = true;
+        }
       }
     } catch (err) {
-      console.error('[Telegram] Init error:', err.message);
+      console.error('[Telegram] Init notice:', err.message);
+      this.client = null;
     }
   }
 
   /**
-   * Lazily ensures TelegramClient is connected (essential for Vercel / serverless runtimes)
+   * Lazily ensures TelegramClient is connected and authorized
    */
-  async ensureClient() {
+  async ensureClient(explicitSession = null) {
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
     if (isManualDisconnected) {
       this.client = null;
@@ -83,15 +114,36 @@ class TelegramService {
       return null;
     }
 
+    // If no session is provided and no session is saved in settings, don't attempt init
+    const sessionString = String(explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    if (!sessionString) {
+      if (this.client) {
+        try { await this.client.disconnect(); } catch (e) {}
+        this.client = null;
+      }
+      this.authType = 'demo';
+      return null;
+    }
+
+    // If client is already connected and authorized, check if session matches
     if (this.client) {
       try {
-        if (this.client.connected) {
-          return this.client;
+        if (!this.client.connected) {
+          await this.client.connect();
         }
-        await this.client.connect();
-        return this.client;
+        const isAuth = await this.client.checkAuthorization();
+        if (isAuth) {
+          const currentSession = this.client.session?.save?.() || '';
+          if (!explicitSession || currentSession === explicitSession.trim()) {
+            return this.client;
+          }
+        }
+        // If authorization failed or session differs, clean up old client
+        try { await this.client.disconnect(); } catch (e) {}
+        this.client = null;
       } catch (e) {
-        console.warn('[Telegram] Reconnection failed, resetting client:', e.message);
+        console.warn('[Telegram] Reconnection check notice:', e.message);
+        try { await this.client.disconnect(); } catch (e2) {}
         this.client = null;
       }
     }
@@ -101,7 +153,7 @@ class TelegramService {
     }
 
     this._initPromise = (async () => {
-      await this.init();
+      await this.init(explicitSession);
       return this.client;
     })();
 
@@ -306,8 +358,14 @@ class TelegramService {
    * Verify phone OTP code and complete MTProto login to Saved Messages
    */
   async verifyPhoneCode(code, password = '', passedPhoneCodeHash = null, passedPhoneNumber = null, passedTempSession = null) {
-    const apiId = parseInt(await getSetting('api_id'));
-    const apiHash = await getSetting('api_hash');
+    const apiId = parseInt(await getSetting('api_id')) || 39504238;
+    const rawApiHash = (await getSetting('api_hash')) || '39268a286a89e430e14728116cfe0680';
+    const cleanApiHash = String(rawApiHash).trim();
+
+    if (!cleanApiHash) {
+      throw new Error('Telegram API Hash is missing. Please configure your API credentials.');
+    }
+
     const phoneNumber = (passedPhoneNumber || this.tempPhoneNumber || (await getSetting('phone_number')) || '').trim();
     const phoneCodeHash = (passedPhoneCodeHash || this.tempPhoneCodeHash || (await getSetting('phone_code_hash')) || '').trim();
     const tempAuthSession = (passedTempSession || (await getSetting('temp_auth_session')) || '').trim();
@@ -326,7 +384,7 @@ class TelegramService {
       }
       // Reconstitute client with the exact DC and AuthKey from sendPhoneCode
       const stringSession = new StringSession(tempAuthSession);
-      client = new TelegramClient(stringSession, apiId, apiHash, {
+      client = new TelegramClient(stringSession, apiId, cleanApiHash, {
         connectionRetries: 5,
         useWSS: false,
       });
@@ -569,7 +627,43 @@ class TelegramService {
       throw new Error('API ID, API Hash, and Session String are all required.');
     }
 
-    const stringSession = new StringSession(sessionString.trim());
+    const targetSession = sessionString.trim();
+
+    // Check if existing client is already connected and authorized with this exact session
+    if (this.client) {
+      try {
+        if (!this.client.connected) {
+          await this.client.connect();
+        }
+        const isAuth = await this.client.checkAuthorization();
+        if (isAuth) {
+          const activeSession = this.client.session?.save?.() || '';
+          if (activeSession === targetSession) {
+            const me = await this.client.getMe();
+            return {
+              success: true,
+              sessionString: targetSession,
+              user: {
+                id: me.id.toString(),
+                firstName: me.firstName || '',
+                lastName: me.lastName || '',
+                username: me.username || '',
+                phone: me.phone || '',
+                target: 'Saved Messages (me)',
+              },
+            };
+          }
+        }
+      } catch (e) {}
+
+      // Cleanly disconnect old client before connecting new one
+      try {
+        await this.client.disconnect();
+      } catch (e) {}
+      this.client = null;
+    }
+
+    const stringSession = new StringSession(targetSession);
     const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
       connectionRetries: 5,
       useWSS: false,
@@ -578,13 +672,14 @@ class TelegramService {
     await client.connect();
     const isAuth = await client.checkAuthorization();
     if (!isAuth) {
+      try { await client.disconnect(); } catch (e) {}
       throw new Error('Invalid or expired Telegram Session String.');
     }
 
     await setSetting('manual_disconnect', false);
     await setSetting('api_id', cleanApiId.toString());
     await setSetting('api_hash', cleanApiHash);
-    await setSetting('session_string', sessionString.trim());
+    await setSetting('session_string', targetSession);
     await setSetting('auth_type', 'saved_messages');
     await setSetting('chat_id', 'me');
 
@@ -595,7 +690,7 @@ class TelegramService {
     const me = await client.getMe();
     return {
       success: true,
-      sessionString: sessionString.trim(),
+      sessionString: targetSession,
       user: {
         id: me.id.toString(),
         firstName: me.firstName || '',
@@ -636,8 +731,8 @@ class TelegramService {
    * Upload file directly to Telegram Saved Messages ('me') or local sandbox.
    * Supports UNLIMITED file sizes by automatically chunking files exceeding 1.9GB.
    */
-  async uploadFile({ originalName, buffer, mimeType, size, filePath = null }) {
-    await this.ensureClient();
+  async uploadFile({ originalName, buffer, mimeType, size, filePath = null, sessionString = null }) {
+    await this.ensureClient(sessionString);
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const localCachedDest = path.join(CACHE_DIR, `${Date.now()}_${safeName}`);
     const MAX_TELEGRAM_SINGLE_FILE = 1900 * 1024 * 1024; // 1.9 GB safe ceiling for MTProto single document
@@ -774,8 +869,8 @@ class TelegramService {
   /**
    * Download / Stream a file from Telegram Saved Messages with multi-part chunk reconstruction and local cache
    */
-  async getFileStream(fileRecord) {
-    await this.ensureClient();
+  async getFileStream(fileRecord, explicitSession = null) {
+    await this.ensureClient(explicitSession);
     const safeName = (fileRecord.name || fileRecord.original_name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
     const cacheKey = fileRecord.telegram_msg_id || fileRecord.id;
     const cacheFilePath = path.join(CACHE_DIR, `${fileRecord.id}_${cacheKey}_${safeName}`);

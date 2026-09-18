@@ -107,6 +107,8 @@ export function AuthProvider({ children }) {
     return unsubscribe;
   }, []);
 
+
+
   // Email/Password Signin
   const loginWithEmail = async (email, password) => {
     setAuthError('');

@@ -114,7 +114,16 @@ class Database {
             const { session_string, ...safeSettings } = cloudData.settings;
             this.data.settings = { ...this.data.settings, ...safeSettings, session_string: '', manual_disconnect: true };
           } else {
-            this.data.settings = { ...this.data.settings, ...cloudData.settings };
+            // Keep local valid session_string if cloudData has empty session_string
+            const localSession = this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || '';
+            const cloudSession = cloudData.settings?.session_string || '';
+            const sessionToKeep = localSession || cloudSession;
+
+            this.data.settings = {
+              ...this.data.settings,
+              ...cloudData.settings,
+              session_string: sessionToKeep,
+            };
           }
         }
         if (Array.isArray(cloudData.api_keys)) {
@@ -143,13 +152,29 @@ class Database {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return { ...defaultData, ...JSON.parse(raw) };
+        const parsed = JSON.parse(raw);
+        return {
+          ...defaultData,
+          ...parsed,
+          settings: {
+            ...defaultData.settings,
+            ...(parsed.settings || {}),
+          },
+        };
       }
       if (BUNDLED_DB_FILE !== DB_FILE && fs.existsSync(BUNDLED_DB_FILE)) {
         const raw = fs.readFileSync(BUNDLED_DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        this.saveData({ ...defaultData, ...parsed }, true);
-        return { ...defaultData, ...parsed };
+        const merged = {
+          ...defaultData,
+          ...parsed,
+          settings: {
+            ...defaultData.settings,
+            ...(parsed.settings || {}),
+          },
+        };
+        this.saveData(merged, true);
+        return merged;
       }
     } catch (err) {
       console.error('[DB] Error loading JSON DB, resetting to defaults:', err.message);
@@ -196,7 +221,7 @@ class Database {
 
     if (key === 'session_string') {
       if (isManualDisconnected) return '';
-      return this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || null;
+      return this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || '';
     }
 
     if (key === 'auth_type') {

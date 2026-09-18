@@ -1,8 +1,22 @@
-const { db } = require('../db');
+const { db, getSetting } = require('../db');
 
 exports.getFolders = async (req, res) => {
   try {
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    const sessionString = String((await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const clientSession = String(req.headers?.['x-telegram-session'] || req.query?.session || '').trim();
+    const activeSession = sessionString || clientSession;
+
     const folders = await db.getFolders();
+    if (isManualDisconnected || !activeSession) {
+      // When disconnected from Telegram, hide custom folders created while connected and zero out counts
+      const defaultFolderIds = ['root_documents', 'root_media', 'root_photos'];
+      const defaultFolders = folders
+        .filter((f) => defaultFolderIds.includes(f.id))
+        .map((f) => ({ ...f, file_count: 0, total_size: 0 }));
+      return res.json({ success: true, folders: defaultFolders });
+    }
+
     res.json({ success: true, folders });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

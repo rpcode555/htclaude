@@ -126,6 +126,12 @@ function MainApp() {
     if (!isAuthorized || currentView === 'admin' || currentView === 'developer') return;
     if (!silent) setLoadingFiles(true);
     try {
+      const hasTelegramSession = !!localStorage.getItem('htc_tg_session') || !!authStatus?.connected;
+      if (!hasTelegramSession) {
+        setFiles([]);
+        return;
+      }
+
       const filter =
         currentView === 'trash'
           ? 'trash'
@@ -147,7 +153,7 @@ function MainApp() {
       });
 
       if (res.success) {
-        setFiles(res.files);
+        setFiles(res.files || []);
       }
     } catch (err) {
       console.error('[App] Load files error:', err);
@@ -179,9 +185,39 @@ function MainApp() {
     return () => clearInterval(interval);
   }, [isAuthorized, currentView, selectedCategory, currentFolderId]);
 
+  const showToast = (message, duration = 4000) => {
+    setToast({ message, visible: true });
+    setTimeout(() => setToast({ message: '', visible: false }), duration);
+  };
+
+  const triggerUpload = () => {
+    if (!authStatus?.connected) {
+      showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
+      setIsSettingsOpen(true);
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const handleNewFileClick = () => {
+    if (!authStatus?.connected) {
+      showToast('⚠️ First connect Telegram! Please connect your Telegram account before creating files.');
+      setIsSettingsOpen(true);
+      return;
+    }
+    setIsCreateFileModalOpen(true);
+  };
+
   // Upload Handler
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
+
+    if (!authStatus?.connected) {
+      showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
+      setIsSettingsOpen(true);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     const fileArray = Array.from(fileList);
     const items = fileArray.map((f) => ({
@@ -241,7 +277,7 @@ function MainApp() {
     } catch (err) {
       console.error('Upload failed:', err);
       setUploadQueue((prev) => prev.map((item) => ({ ...item, status: 'error' })));
-      alert(`Upload failed: ${err.message}`);
+      showToast(`Upload failed: ${err.message}`);
     } finally {
       setIsUploading(false);
     }
@@ -283,6 +319,12 @@ function MainApp() {
     e.stopPropagation();
     dragCounter.current = 0;
     setIsDragOver(false);
+
+    if (!authStatus?.connected) {
+      showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
+      setIsSettingsOpen(true);
+      return;
+    }
 
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleUploadFiles(e.dataTransfer.files);
@@ -358,16 +400,18 @@ function MainApp() {
 
   // File Actions
   const handleDownloadFile = async (file) => {
+    if (!file) return;
     try {
-      const token = api.getDownloadUrl(file.id);
+      const idToken = currentUser ? await currentUser.getIdToken() : '';
+      const downloadUrl = api.getDownloadUrl(file.id, idToken);
       const link = document.createElement('a');
-      link.href = token;
+      link.href = downloadUrl;
       link.download = file.name;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } catch (err) {
-      alert(`Download error: ${err.message}`);
+      window.open(api.getDownloadUrl(file.id), '_blank');
     }
   };
 
@@ -518,7 +562,10 @@ function MainApp() {
         type="file"
         multiple
         ref={fileInputRef}
-        onChange={(e) => handleUploadFiles(e.target.files)}
+        onChange={(e) => {
+          handleUploadFiles(e.target.files);
+          e.target.value = '';
+        }}
         className="hidden"
       />
 
@@ -542,7 +589,7 @@ function MainApp() {
         folders={folders}
         stats={stats}
         authStatus={authStatus}
-        onUploadClick={() => fileInputRef.current?.click()}
+        onUploadClick={triggerUpload}
         onOpenSettings={() => {
           setIsSettingsOpen(true);
           setIsMobileSidebarOpen(false);
@@ -551,10 +598,7 @@ function MainApp() {
           setIsFolderModalOpen(true);
           setIsMobileSidebarOpen(false);
         }}
-        onNewFileClick={() => {
-          setIsCreateFileModalOpen(true);
-          setIsMobileSidebarOpen(false);
-        }}
+        onNewFileClick={handleNewFileClick}
         onOpenAdminPanel={() => {
           setCurrentView('admin');
           setIsMobileSidebarOpen(false);
@@ -582,9 +626,9 @@ function MainApp() {
           setSortBy={setSortBy}
           sortOrder={sortOrder}
           setSortOrder={setSortOrder}
-          onUploadClick={() => fileInputRef.current?.click()}
+          onUploadClick={triggerUpload}
           onNewFolderClick={() => setIsFolderModalOpen(true)}
-          onNewFileClick={() => setIsCreateFileModalOpen(true)}
+          onNewFileClick={handleNewFileClick}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenAdminPanel={() => setCurrentView('admin')}
           isAdminActive={currentView === 'admin'}
@@ -633,8 +677,8 @@ function MainApp() {
             onRestoreFolder={handleRestoreFolder}
             onDeleteFolderPermanent={handleDeleteFolderPermanent}
             onEmptyTrash={handleEmptyTrash}
-            onUploadTrigger={() => fileInputRef.current?.click()}
-            onNewFileClick={() => setIsCreateFileModalOpen(true)}
+            onUploadTrigger={triggerUpload}
+            onNewFileClick={handleNewFileClick}
             onShareFile={handleCopyShareLink}
             isDragOver={isDragOver}
           />
@@ -671,7 +715,9 @@ function MainApp() {
         <SettingsModal
           authStatus={authStatus}
           onClose={() => setIsSettingsOpen(false)}
-          onRefreshStatus={loadData}
+          onRefreshStatus={async () => {
+            await Promise.all([loadData(), loadFiles()]);
+          }}
         />
       )}
 
