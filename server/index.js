@@ -131,6 +131,7 @@ if (require.main === module && !process.env.VERCEL) {
 
   // Remove socket timeout for unlimited multi-GB file uploads/downloads
   server.timeout = 0;
+  server.requestTimeout = 0;
   server.keepAliveTimeout = 1200000; // 20 minutes
   server.headersTimeout = 1205000;
 }

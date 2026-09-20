@@ -783,7 +783,7 @@ class TelegramService {
               file: customFile,
               caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
               forceDocument: true,
-              workers: 8,
+              workers: 1,
             });
 
             chunkMsgIds.push(result.id);
@@ -818,7 +818,7 @@ class TelegramService {
           file: customFile,
           caption: `📁 Hightech Claude: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
           forceDocument: true,
-          workers: 8,
+          workers: 1,
         });
 
         console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);

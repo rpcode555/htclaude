@@ -449,7 +449,7 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash, o
     }
 
     // 5. PDF Document (True Full Width & Height)
-    if (file.mime_type.includes('pdf') || /\.pdf$/i.test(file.name)) {
+    if (file.mime_type?.includes('pdf') || /\.pdf$/i.test(file.name)) {
       return (
         <div className="flex-1 w-full h-full relative p-1 sm:p-2">
           {mediaLoading && renderLoader('Loading PDF Document...')}

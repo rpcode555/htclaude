@@ -39,6 +39,8 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
           secure: false,
+          timeout: 0,
+          proxyTimeout: 0,
         },
       },
     },

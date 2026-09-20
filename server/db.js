@@ -850,7 +850,9 @@ function detectCategory(mimeType = '', fileName = '') {
     mime.includes('tar') ||
     mime.includes('7z') ||
     mime.includes('compressed') ||
-    ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso'].includes(ext)
+    mime.includes('android') ||
+    mime.includes('package-archive') ||
+    ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso', '.apk', '.xapk', '.apks'].includes(ext)
   ) {
     return 'archives';
   }

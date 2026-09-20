@@ -103,6 +103,21 @@ exports.uploadFiles = async (req, res) => {
     }
     const targetFolderId = req.body.folder_id === 'root' || !req.body.folder_id ? null : req.body.folder_id;
     const uploadedRecords = [];
+    let lastError = null;
+
+    // Clean up temporary files if client abruptly closes or cancels connection
+    const cleanupTempFiles = () => {
+      if (req.files && Array.isArray(req.files)) {
+        for (const file of req.files) {
+          if (file.path && fs.existsSync(file.path)) {
+            try { fs.unlinkSync(file.path); } catch (e) {}
+          }
+        }
+      }
+    };
+    req.on('close', () => {
+      if (uploadedRecords.length === 0) cleanupTempFiles();
+    });
 
     for (const file of req.files) {
       try {
@@ -111,6 +126,7 @@ exports.uploadFiles = async (req, res) => {
 
         if (!validateMagicBytes(file.path, originalName)) {
           console.warn(`[Security Alert] Rejected file upload with mismatched executable signature: ${originalName}`);
+          lastError = `Security Alert: Rejected ${originalName} with mismatched executable signature.`;
           continue;
         }
 
@@ -150,6 +166,7 @@ exports.uploadFiles = async (req, res) => {
         uploadedRecords.push(record);
       } catch (fileErr) {
         console.error(`[FileController] Error processing file ${file.originalname}:`, fileErr.message);
+        lastError = fileErr.message;
       } finally {
         // Always clean up temporary disk file from TEMP_UPLOAD_DIR
         if (file.path && fs.existsSync(file.path)) {
@@ -161,7 +178,7 @@ exports.uploadFiles = async (req, res) => {
     }
 
     if (uploadedRecords.length === 0) {
-      return res.status(500).json({ success: false, error: 'Failed to process any of the uploaded files.' });
+      return res.status(500).json({ success: false, error: lastError || 'Failed to process any of the uploaded files.' });
     }
 
     res.status(201).json({
