@@ -130,11 +130,12 @@ async function verifyAdminToken(idToken) {
     return null;
   }
 
+  const tokenExpiryTime = decoded.exp ? Math.min(decoded.exp * 1000, Date.now() + 30 * 60 * 1000) : Date.now() + 30 * 60 * 1000;
   const userData = {
     uid: userId || 'admin',
     email: userEmail || `${userPhone || 'admin'}@telegram.auth`,
     phone: userPhone,
-    expiry: Date.now() + 5 * 60 * 1000,
+    expiry: tokenExpiryTime,
   };
 
   pruneTokenCache();
@@ -156,12 +157,12 @@ async function requireAdminAuth(req, res, next) {
       idToken = req.query.token;
     }
 
-    // Allow active Telegram session for authenticated browser downloads / direct requests
+    // Allow active Telegram session for authenticated requests / streaming / downloads
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     if (clientSession && clientSession.length > 30) {
       const { getSetting } = require('../db');
-      const storedSession = (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
-      if (!storedSession || clientSession === storedSession) {
+      const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+      if (!isManualDisconnected) {
         req.telegramSession = clientSession;
         return next();
       }

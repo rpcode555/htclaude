@@ -6,21 +6,8 @@ exports.getStatus = async (req, res) => {
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
 
-    // Check if client is already connected and authorized
-    let isCurrentlyConnected = false;
-    if (telegramService.client && !isManualDisconnected) {
-      try {
-        if (!telegramService.client.connected) {
-          await telegramService.client.connect();
-        }
-        isCurrentlyConnected = await telegramService.client.checkAuthorization();
-      } catch (e) {
-        isCurrentlyConnected = false;
-      }
-    }
-
-    // Only reconnect if NOT currently connected AND client session is available AND not manually disconnected
-    if (!isCurrentlyConnected && clientSession && !isManualDisconnected) {
+    // Only auto-reconnect if client instance is not yet created AND client session is available AND not manually disconnected
+    if (!telegramService.client && clientSession && !isManualDisconnected) {
       try {
         const apiId = await getSetting('api_id');
         const apiHash = await getSetting('api_hash');
@@ -33,7 +20,7 @@ exports.getStatus = async (req, res) => {
       }
     }
 
-    const status = await telegramService.getStatus();
+    const status = await telegramService.getStatus(clientSession);
     const settings = await getAllSettings();
     const activeSession = (await getSetting('session_string')) || clientSession || '';
 
@@ -50,7 +37,7 @@ exports.getStatus = async (req, res) => {
     res.json({
       success: true,
       ...status,
-      sessionString: status.connected ? (status.sessionString || activeSession) : '',
+      sessionString: status.connected ? (status.sessionString || activeSession) : activeSession,
       settings: safeSettings,
     });
   } catch (err) {

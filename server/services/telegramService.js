@@ -30,6 +30,8 @@ class TelegramService {
     this.qrClient = null;
     this._initPromise = null;
     this._hasLoggedNoSession = false;
+    this._cachedUserDetails = null;
+    this._lastStatusCheck = 0;
   }
 
   /**
@@ -55,7 +57,7 @@ class TelegramService {
       const sessionString = String(rawSession).trim();
 
       if (apiId && apiHash && sessionString) {
-        // If client already exists and is authorized with the same session, keep it!
+        // If client already exists and is authorized, keep it!
         if (this.client) {
           try {
             if (!this.client.connected) {
@@ -63,13 +65,10 @@ class TelegramService {
             }
             const isAuth = await this.client.checkAuthorization();
             if (isAuth) {
-              const currentSession = this.client.session?.save?.() || '';
-              if (currentSession === sessionString) {
-                return;
-              }
+              return;
             }
           } catch (e) {}
-          // Session is different or disconnected; cleanly disconnect old client first
+          // Session is disconnected or unauthorized; cleanly disconnect old client first
           try { await this.client.disconnect(); } catch (e) {}
           this.client = null;
         }
@@ -86,6 +85,18 @@ class TelegramService {
           this.client = client;
           this._hasLoggedNoSession = false;
           const me = await this.client.getMe();
+          if (me) {
+            this._cachedUserDetails = {
+              id: me.id.toString(),
+              firstName: me.firstName || '',
+              lastName: me.lastName || '',
+              username: me.username || '',
+              phone: me.phone || '',
+              isPremium: me.premium || false,
+              target: 'Saved Messages (me)',
+            };
+            this._lastStatusCheck = Date.now();
+          }
           console.log(`[Telegram] Connected to Telegram Saved Messages as ${me.firstName || 'User'} (@${me.username || me.id})`);
           this.setupSavedMessagesListener();
         } else {
@@ -127,7 +138,7 @@ class TelegramService {
       return null;
     }
 
-    // If client is already connected and authorized, check if session matches
+    // If client is already connected and authorized, check if session is active
     if (this.client) {
       try {
         if (!this.client.connected) {
@@ -135,18 +146,13 @@ class TelegramService {
         }
         const isAuth = await this.client.checkAuthorization();
         if (isAuth) {
-          const currentSession = this.client.session?.save?.() || '';
-          if (!explicitSession || currentSession === explicitSession.trim()) {
-            return this.client;
-          }
+          return this.client;
         }
-        // If authorization failed or session differs, clean up old client
+        // If authorization failed, clean up old client
         try { await this.client.disconnect(); } catch (e) {}
         this.client = null;
       } catch (e) {
         console.warn('[Telegram] Reconnection check notice:', e.message);
-        try { await this.client.disconnect(); } catch (e2) {}
-        this.client = null;
       }
     }
 
@@ -246,21 +252,59 @@ class TelegramService {
   /**
    * Get current connection status and details (without leaking secrets)
    */
-  async getStatus() {
+  async getStatus(explicitSession = null) {
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    if (isManualDisconnected) {
+      return {
+        connected: false,
+        authType: 'demo',
+        configuredType: 'saved_messages',
+        sessionString: '',
+        user: {
+          firstName: 'Disconnected',
+          username: '',
+          target: 'Saved Messages (Offline / Sandbox)',
+        },
+        hasCredentials: { hasApiId: false, hasSession: false },
+        manualDisconnect: true,
+      };
+    }
+
+    const sessionString = String(explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const hasSession = !!sessionString;
+    const now = Date.now();
+
+    // Fast memory-cached response (TTL: 45 seconds) to avoid hammering Telegram DC with getMe() MTProto requests
+    if (this.client && this._cachedUserDetails && (now - this._lastStatusCheck < 45000)) {
+      const activeSession = this.client?.session?.save?.() || sessionString;
+      return {
+        connected: true,
+        authType: 'saved_messages',
+        configuredType: 'saved_messages',
+        sessionString: activeSession,
+        user: this._cachedUserDetails,
+        hasCredentials: {
+          hasApiId: true,
+          hasSession: true,
+        },
+        manualDisconnect: false,
+      };
+    }
+
     if (!isManualDisconnected) {
-      await this.ensureClient();
+      await this.ensureClient(sessionString);
     }
 
     const apiId = await getSetting('api_id');
-    const sessionString = await getSetting('session_string');
-    const hasSession = !!sessionString && !isManualDisconnected;
-
     let userDetails = null;
 
     if (this.client && !isManualDisconnected) {
       try {
-        const me = await this.client.getMe();
+        // 5-second timeout safeguard on getMe so cold-starts or network delays never freeze the response
+        const me = await Promise.race([
+          this.client.getMe(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('getMe timeout')), 5000)),
+        ]);
         if (me) {
           userDetails = {
             id: me.id.toString(),
@@ -271,20 +315,27 @@ class TelegramService {
             isPremium: me.premium || false,
             target: 'Saved Messages (me)',
           };
+          this._cachedUserDetails = userDetails;
+          this._lastStatusCheck = Date.now();
         }
       } catch (err) {
-        console.error('[Telegram] Error getting user details:', err.message);
+        console.warn('[Telegram] Transient error getting user details:', err.message);
+        // If transient timeout happened but we have cached user details, keep them!
+        if (this._cachedUserDetails) {
+          userDetails = this._cachedUserDetails;
+        }
       }
     }
 
     const activeSession = this.client?.session?.save?.() || sessionString || '';
+    const isConnected = !!userDetails || (!!this.client && hasSession && !isManualDisconnected);
 
     return {
-      connected: !!userDetails,
-      authType: userDetails ? 'saved_messages' : 'demo',
+      connected: isConnected,
+      authType: isConnected ? 'saved_messages' : 'demo',
       configuredType: 'saved_messages',
-      sessionString: userDetails ? activeSession : '',
-      user: userDetails || {
+      sessionString: isConnected ? activeSession : '',
+      user: userDetails || this._cachedUserDetails || {
         firstName: isManualDisconnected ? 'Disconnected' : 'Guest User',
         username: '',
         target: 'Saved Messages (Offline / Sandbox)',
@@ -461,6 +512,18 @@ class TelegramService {
     this.setupSavedMessagesListener();
 
     const me = await client.getMe();
+    if (me) {
+      this._cachedUserDetails = {
+        id: me.id.toString(),
+        firstName: me.firstName || '',
+        lastName: me.lastName || '',
+        username: me.username || '',
+        phone: me.phone || '',
+        isPremium: me.premium || false,
+        target: 'Saved Messages (me)',
+      };
+      this._lastStatusCheck = Date.now();
+    }
     return {
       status: 'success',
       success: true,
@@ -645,20 +708,21 @@ class TelegramService {
         }
         const isAuth = await this.client.checkAuthorization();
         if (isAuth) {
-          const activeSession = this.client.session?.save?.() || '';
-          if (activeSession === targetSession) {
-            const me = await this.client.getMe();
+          const me = await this.client.getMe();
+          if (me) {
+            this._cachedUserDetails = {
+              id: me.id.toString(),
+              firstName: me.firstName || '',
+              lastName: me.lastName || '',
+              username: me.username || '',
+              phone: me.phone || '',
+              target: 'Saved Messages (me)',
+            };
+            this._lastStatusCheck = Date.now();
             return {
               success: true,
-              sessionString: targetSession,
-              user: {
-                id: me.id.toString(),
-                firstName: me.firstName || '',
-                lastName: me.lastName || '',
-                username: me.username || '',
-                phone: me.phone || '',
-                target: 'Saved Messages (me)',
-              },
+              sessionString: this.client.session?.save?.() || targetSession,
+              user: this._cachedUserDetails,
             };
           }
         }
@@ -723,6 +787,8 @@ class TelegramService {
 
     this.listenerAttached = false;
     this.authType = 'demo';
+    this._cachedUserDetails = null;
+    this._lastStatusCheck = 0;
 
     await setSetting('manual_disconnect', true);
     await setSetting('session_string', '');

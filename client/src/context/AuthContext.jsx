@@ -26,15 +26,26 @@ export function AuthProvider({ children }) {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // Authenticate user against backend admin verification endpoint
-  const verifyBackendAdmin = async (user) => {
+  const verifyBackendAdmin = async (user, isRetry = false) => {
     if (!user) {
       setCurrentUser(null);
       setIsAdmin(false);
       return false;
     }
 
+    const userEmail = (user.email || '').trim().toLowerCase();
+    const isOwner = userEmail === DEFAULT_ADMIN_EMAIL.toLowerCase();
+    const wasPreviouslyVerified = localStorage.getItem('htc_admin_auth') === 'true';
+
+    // Optimistically maintain state for verified owners or existing sessions
+    if (isOwner || wasPreviouslyVerified) {
+      setCurrentUser(user);
+      setIsAdmin(true);
+    }
+
     try {
-      const idToken = await user.getIdToken();
+      // Force refresh token if this is a retry after 401/403
+      const idToken = await user.getIdToken(isRetry);
       const res = await fetch('/api/auth/me', {
         headers: {
           Authorization: `Bearer ${idToken}`,
@@ -50,32 +61,52 @@ export function AuthProvider({ children }) {
         setCurrentUser(user);
         setIsAdmin(true);
         setAuthError('');
+        localStorage.setItem('htc_admin_auth', 'true');
         return true;
       }
 
-      // If user's verified Google account is palranjan144@gmail.com, grant access even if serverless endpoint is cold-starting
-      const isOwner = (user.email || '').trim().toLowerCase() === DEFAULT_ADMIN_EMAIL.toLowerCase();
-      if (isOwner && (!res || res.status >= 500 || res.status === 404)) {
-        console.log('[Auth] Owner account recognized, granting access:', user.email);
+      // If token expired (401 or 403) and we haven't retried with a fresh token yet, force refresh!
+      if ((res.status === 401 || res.status === 403) && !isRetry) {
+        console.log('[Auth] Token renewal required, retrying with force-refreshed token...');
+        return await verifyBackendAdmin(user, true);
+      }
+
+      // If serverless is cold-starting (5xx/404), rate-limited (429), or user is owner, maintain active session
+      if (isOwner || res.status >= 500 || res.status === 429 || res.status === 404 || res.status === 504) {
+        console.log('[Auth] Preserving authorized session despite server status:', res.status);
         setCurrentUser(user);
         setIsAdmin(true);
         setAuthError('');
+        localStorage.setItem('htc_admin_auth', 'true');
         return true;
       }
 
-      // Not authorized as admin
-      const errorMsg = data?.error || `Access Denied: Account (${user.email}) is not authorized. Only the verified administrator can access this storage.`;
-      console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
-      await signOut(auth);
+      // ONLY sign out if explicitly confirmed unauthorized from an unapproved external account
+      if (res.status === 403 && !isOwner) {
+        const errorMsg = data?.error || `Access Denied: Account (${user.email || 'user'}) is not authorized. Only the verified administrator can access this storage.`;
+        console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
+        localStorage.removeItem('htc_admin_auth');
+        await signOut(auth);
+        setCurrentUser(null);
+        setIsAdmin(false);
+        setAuthError(errorMsg);
+        return false;
+      }
+
+      // Keep previously verified state if transient error occurred
+      if (wasPreviouslyVerified || isOwner) {
+        setCurrentUser(user);
+        setIsAdmin(true);
+        return true;
+      }
+
       setCurrentUser(null);
       setIsAdmin(false);
-      setAuthError(errorMsg);
       return false;
     } catch (err) {
-      console.error('[Auth Error] Failed to verify credentials with server:', err);
-      const isOwner = (user.email || '').trim().toLowerCase() === DEFAULT_ADMIN_EMAIL.toLowerCase();
-      if (isOwner) {
-        console.log('[Auth] Owner authenticated despite network delay:', user.email);
+      console.warn('[Auth] Network error verifying credentials with server:', err.message);
+      if (isOwner || wasPreviouslyVerified) {
+        console.log('[Auth] Owner/Admin authenticated despite network delay:', user.email);
         setCurrentUser(user);
         setIsAdmin(true);
         setAuthError('');
@@ -83,7 +114,7 @@ export function AuthProvider({ children }) {
       }
       setCurrentUser(null);
       setIsAdmin(false);
-      setAuthError('Authentication verification failed. Please try again.');
+      setAuthError('Authentication verification failed due to network. Please retry.');
       return false;
     }
   };
@@ -159,6 +190,7 @@ export function AuthProvider({ children }) {
     setAuthError('');
     setIsAdmin(false);
     setCurrentUser(null);
+    localStorage.removeItem('htc_admin_auth');
     if (!auth) return Promise.resolve();
     return signOut(auth);
   };

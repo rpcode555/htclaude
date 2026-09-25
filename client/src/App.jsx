@@ -200,15 +200,34 @@ function MainApp() {
     }
   }, [isAuthorized, authStatus?.connected, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
 
-  // Real-time background sync interval (checks every 5s for live updates across devices/tabs)
+  // Real-time background sync: pauses when tab is hidden, refreshes immediately on focus, and polls every 25s
   // Uses silent=true so it never triggers skeleton loaders during background refresh
   useEffect(() => {
     if (!isAuthorized) return;
+
+    // Fast sync when user switches back to this tab
+    const handleFocus = () => {
+      if (document.visibilityState === 'visible') {
+        loadFiles(true);
+        loadData();
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    // Periodic live background sync (every 25 seconds when tab is actively viewed)
     const interval = setInterval(() => {
-      loadFiles(true); // silent — no skeleton flash
-      loadData();
-    }, 5000);
-    return () => clearInterval(interval);
+      if (document.visibilityState === 'visible') {
+        loadFiles(true);
+        loadData();
+      }
+    }, 25000);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
   }, [isAuthorized, currentView, selectedCategory, currentFolderId]);
 
   const showToast = (message, duration = 4000) => {
