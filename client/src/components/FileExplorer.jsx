@@ -25,6 +25,7 @@ import {
   Share2,
   Upload,
   AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../api';
 import { formatBytes, formatDate } from '../utils';
@@ -81,6 +82,8 @@ export default function FileExplorer({
   onUploadTrigger,
   onNewFileClick,
   onShareFile,
+  onSyncTelegram,
+  isSyncingTelegram = false,
   isDragOver,
 }) {
   const safeFiles         = Array.isArray(files)         ? files         : [];
@@ -186,6 +189,18 @@ export default function FileExplorer({
             >
               <FilePlus className="w-3.5 h-3.5 text-rose-500" />
               <span>New File</span>
+            </button>
+          )}
+
+          {currentView !== 'trash' && onSyncTelegram && (
+            <button
+              onClick={onSyncTelegram}
+              disabled={isSyncingTelegram}
+              className="btn-secondary flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer dark:bg-slate-900 dark:border-slate-800 dark:text-slate-200 hover:border-rose-400"
+              title="Sync files and folders from Telegram Cloud"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-rose-500 ${isSyncingTelegram ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncingTelegram ? 'Syncing...' : 'Sync Cloud'}</span>
             </button>
           )}
 

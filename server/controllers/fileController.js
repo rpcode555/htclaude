@@ -3,6 +3,7 @@ const path = require('path');
 const mime = require('mime-types');
 const { db, detectCategory, getSetting } = require('../db');
 const telegramService = require('../services/telegramService');
+const uploadTracker = require('../services/uploadTracker');
 
 const { UPLOADS_DIR, isSafePath } = require('../config/paths');
 const { verifyAdminToken } = require('../middleware/authMiddleware');
@@ -56,6 +57,15 @@ exports.listFiles = async (req, res) => {
       return res.json({ success: true, files: [] });
     }
 
+    // Auto-sync if file list is currently empty
+    if ((db.data.files || []).length === 0) {
+      try {
+        await telegramService.syncFromTelegramSavedMessages(activeSession);
+      } catch (e) {
+        // Non-blocking
+      }
+    }
+
     const { folder_id, category, filter, search, sortBy, sortOrder } = req.query;
     const files = await db.getFiles({
       folder_id,
@@ -102,6 +112,7 @@ exports.uploadFiles = async (req, res) => {
       });
     }
     const targetFolderId = req.body.folder_id === 'root' || !req.body.folder_id ? null : req.body.folder_id;
+    const uploadId = (req.body.upload_id || req.headers['x-upload-id'] || '').trim();
     const uploadedRecords = [];
     let lastError = null;
 
@@ -114,6 +125,9 @@ exports.uploadFiles = async (req, res) => {
           }
         }
       }
+      if (uploadId) {
+        uploadTracker.error(uploadId, 'Upload connection aborted');
+      }
     };
     req.on('close', () => {
       if (uploadedRecords.length === 0) cleanupTempFiles();
@@ -124,9 +138,14 @@ exports.uploadFiles = async (req, res) => {
         const rawName = Buffer.from(file.originalname, 'latin1').toString('utf8');
         const originalName = sanitizeFileName(rawName);
 
+        if (uploadId) {
+          uploadTracker.init(uploadId, originalName, file.size);
+        }
+
         if (!validateMagicBytes(file.path, originalName)) {
           console.warn(`[Security Alert] Rejected file upload with mismatched executable signature: ${originalName}`);
           lastError = `Security Alert: Rejected ${originalName} with mismatched executable signature.`;
+          if (uploadId) uploadTracker.error(uploadId, lastError);
           continue;
         }
 
@@ -141,7 +160,16 @@ exports.uploadFiles = async (req, res) => {
           mimeType,
           size: file.size,
           sessionString: clientSession,
+          onProgress: (ratio) => {
+            if (uploadId) {
+              uploadTracker.updateCloudProgress(uploadId, ratio);
+            }
+          },
         });
+
+        if (uploadId) {
+          uploadTracker.finalizing(uploadId);
+        }
 
         // Insert record into DB
         const record = await db.insertFile({
@@ -164,9 +192,15 @@ exports.uploadFiles = async (req, res) => {
         });
 
         uploadedRecords.push(record);
+        if (uploadId) {
+          uploadTracker.complete(uploadId);
+        }
       } catch (fileErr) {
         console.error(`[FileController] Error processing file ${file.originalname}:`, fileErr.message);
         lastError = fileErr.message;
+        if (uploadId) {
+          uploadTracker.error(uploadId, fileErr.message);
+        }
       } finally {
         // Always clean up temporary disk file from TEMP_UPLOAD_DIR
         if (file.path && fs.existsSync(file.path)) {
@@ -189,6 +223,16 @@ exports.uploadFiles = async (req, res) => {
   } catch (err) {
     console.error('[FileController] uploadFiles error:', err);
     res.status(500).json({ success: false, error: err.message || 'File upload failed.' });
+  }
+};
+
+exports.getUploadProgress = async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const progress = uploadTracker.get(uploadId);
+    return res.json({ success: true, progress });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 

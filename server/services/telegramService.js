@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { getSetting, setSetting, db, detectCategory } = require('../db');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
@@ -731,7 +732,7 @@ class TelegramService {
    * Upload file directly to Telegram Saved Messages ('me') or local sandbox.
    * Supports UNLIMITED file sizes by automatically chunking files exceeding 1.9GB.
    */
-  async uploadFile({ originalName, buffer, mimeType, size, filePath = null, sessionString = null }) {
+  async uploadFile({ originalName, buffer, mimeType, size, filePath = null, sessionString = null, onProgress = null }) {
     await this.ensureClient(sessionString);
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const localCachedDest = path.join(CACHE_DIR, `${Date.now()}_${safeName}`);
@@ -783,7 +784,13 @@ class TelegramService {
               file: customFile,
               caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
               forceDocument: true,
-              workers: 1,
+              workers: 3,
+              progressCallback: (partProgress) => {
+                if (typeof onProgress === 'function') {
+                  const overallRatio = (partIdx + partProgress) / totalParts;
+                  onProgress(overallRatio);
+                }
+              },
             });
 
             chunkMsgIds.push(result.id);
@@ -792,6 +799,8 @@ class TelegramService {
             // Clean up temporary chunk file
             try { fs.unlinkSync(tempChunkPath); } catch (e) {}
           }
+
+          if (typeof onProgress === 'function') onProgress(1.0);
 
           return {
             storageType: 'telegram',
@@ -818,10 +827,18 @@ class TelegramService {
           file: customFile,
           caption: `📁 Hightech Claude: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
           forceDocument: true,
-          workers: 1,
+          workers: 3,
+          progressCallback: (progress) => {
+            if (typeof onProgress === 'function') {
+              onProgress(progress);
+            }
+          },
         });
 
+        if (typeof onProgress === 'function') onProgress(1.0);
+
         console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);
+        this.scheduleAutoBackup();
 
         return {
           storageType: 'telegram',
@@ -1030,15 +1047,19 @@ class TelegramService {
       return { success: false, error: 'Telegram MTProto client is not connected' };
     }
 
-    const dbPath = path.join(DATA_DIR, 'telecloud_db.json');
-    if (!fs.existsSync(dbPath)) {
-      return { success: false, error: 'Database JSON file not found on disk' };
-    }
-
     try {
-      const fileContent = fs.readFileSync(dbPath);
+      db.saveData();
+      const dbPath = path.join(DATA_DIR, 'telecloud_db.json');
+      let fileContent;
+      if (fs.existsSync(dbPath)) {
+        fileContent = fs.readFileSync(dbPath);
+      } else {
+        fileContent = Buffer.from(JSON.stringify(db.data || {}, null, 2), 'utf-8');
+      }
+
+      const backupFileName = `telecloud_db_backup_${Date.now()}.json`;
       const customFile = new CustomFile(
-        `telecloud_db_backup_${Date.now()}.json`,
+        backupFileName,
         fileContent.length,
         dbPath,
         fileContent
@@ -1050,12 +1071,205 @@ class TelegramService {
         forceDocument: true,
       });
 
+      console.log(`[Telegram Backup] Database snapshot saved to Saved Messages (msg_id: ${result.id})`);
       return {
         success: true,
         messageId: result.id,
         timestamp: new Date().toISOString(),
       };
     } catch (err) {
+      console.warn('[Telegram Backup] Backup error:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Debounced auto-backup after file uploads or changes
+   */
+  scheduleAutoBackup() {
+    if (this._backupTimer) clearTimeout(this._backupTimer);
+    this._backupTimer = setTimeout(() => {
+      this.backupDatabaseToSavedMessages().catch((e) => {
+        console.warn('[Telegram Auto-Backup] Notice:', e.message);
+      });
+    }, 4000);
+  }
+
+  /**
+   * Scan and restore database & files from Telegram Saved Messages ('me')
+   */
+  async syncFromTelegramSavedMessages(explicitSession = null) {
+    await this.ensureClient(explicitSession);
+    if (!this.client) {
+      return { success: false, error: 'Telegram client is not connected. Please connect your Telegram account first.' };
+    }
+
+    try {
+      console.log('[Telegram Sync] Synchronizing files and folders from Telegram Saved Messages...');
+      const messages = await this.client.getMessages('me', { limit: 100 });
+      let restoredFromBackup = false;
+      let newlyIndexedCount = 0;
+
+      // 1. First look for the newest database backup snapshot
+      for (const msg of messages) {
+        if (!msg || !msg.media || !msg.media.document) continue;
+
+        let docFileName = '';
+        if (Array.isArray(msg.media.document.attributes)) {
+          for (const attr of msg.media.document.attributes) {
+            if (attr.fileName) {
+              docFileName = attr.fileName;
+              break;
+            }
+          }
+        }
+
+        const isBackup = docFileName.startsWith('telecloud_db_backup_') ||
+                         (msg.message && msg.message.includes('Hightech Claude DB Backup'));
+
+        if (isBackup) {
+          try {
+            console.log(`[Telegram Sync] Found cloud backup in message ${msg.id} (${docFileName}), downloading...`);
+            const buffer = await this.client.downloadMedia(msg.media);
+            if (buffer && buffer.length > 0) {
+              const parsed = JSON.parse(buffer.toString('utf-8'));
+              if (parsed) {
+                // Merge folders safely
+                if (Array.isArray(parsed.folders) && parsed.folders.length > 0) {
+                  const folderMap = new Map((db.data.folders || []).map((f) => [f.id, f]));
+                  for (const f of parsed.folders) {
+                    const existing = folderMap.get(f.id);
+                    if (!existing || new Date(f.updated_at || f.created_at || 0) >= new Date(existing.updated_at || existing.created_at || 0)) {
+                      folderMap.set(f.id, { ...existing, ...f });
+                    }
+                  }
+                  db.data.folders = Array.from(folderMap.values());
+                }
+
+                // Merge files safely
+                if (Array.isArray(parsed.files) && parsed.files.length > 0) {
+                  const fileMap = new Map((db.data.files || []).map((f) => [f.id, f]));
+                  for (const f of parsed.files) {
+                    const existing = fileMap.get(f.id);
+                    if (!existing || new Date(f.updated_at || f.created_at || 0) >= new Date(existing.updated_at || existing.created_at || 0)) {
+                      fileMap.set(f.id, { ...existing, ...f });
+                    }
+                  }
+                  db.data.files = Array.from(fileMap.values());
+                }
+
+                // Merge API keys
+                if (Array.isArray(parsed.api_keys) && parsed.api_keys.length > 0) {
+                  const keyMap = new Map((db.data.api_keys || []).map((k) => [k.id, k]));
+                  for (const k of parsed.api_keys) {
+                    if (!keyMap.has(k.id)) keyMap.set(k.id, k);
+                  }
+                  db.data.api_keys = Array.from(keyMap.values());
+                }
+
+                restoredFromBackup = true;
+                console.log(`[Telegram Sync] Restored state from cloud snapshot: ${db.data.folders.length} folders, ${db.data.files.length} files`);
+                break;
+              }
+            }
+          } catch (err) {
+            console.warn('[Telegram Sync] Notice while parsing backup snapshot:', err.message);
+          }
+        }
+      }
+
+      // 2. Scan all media messages in Saved Messages to index any uploaded files
+      const existingMsgIds = new Set();
+      for (const f of (db.data.files || [])) {
+        if (f.telegram_msg_id) existingMsgIds.add(f.telegram_msg_id);
+        if (Array.isArray(f.telegram_chunk_ids)) {
+          f.telegram_chunk_ids.forEach((id) => existingMsgIds.add(id));
+        }
+      }
+
+      for (const msg of messages) {
+        if (!msg || !msg.media) continue;
+        if (existingMsgIds.has(msg.id)) continue;
+
+        let fileName = '';
+        let mimeType = 'application/octet-stream';
+        let fileSize = 0;
+
+        if (msg.media.document) {
+          const doc = msg.media.document;
+          fileSize = Number(doc.size) || 0;
+          mimeType = doc.mimeType || 'application/octet-stream';
+          if (Array.isArray(doc.attributes)) {
+            for (const attr of doc.attributes) {
+              if (attr.fileName) {
+                fileName = attr.fileName;
+                break;
+              }
+            }
+          }
+        } else if (msg.media.photo) {
+          fileName = `photo_${msg.id}.jpg`;
+          mimeType = 'image/jpeg';
+          fileSize = 0;
+        }
+
+        if (!fileName) continue;
+        if (fileName.startsWith('telecloud_db_backup_')) continue;
+
+        // Extract original name from caption if present
+        if (msg.message && msg.message.includes('Hightech Claude')) {
+          const match = msg.message.match(/Hightech Claude(?: \[Part \d+\/\d+\])?: (.+?)(?: \([\d.]+ [KMGT]?B\))?$/m);
+          if (match && match[1]) {
+            fileName = match[1].trim();
+          }
+        }
+
+        const category = detectCategory(mimeType, fileName);
+        const newFileRecord = {
+          id: 'file_' + crypto.randomUUID(),
+          folder_id: null,
+          name: fileName,
+          original_name: fileName,
+          mime_type: mimeType,
+          size: fileSize,
+          category,
+          telegram_msg_id: msg.id,
+          telegram_chunk_ids: [msg.id],
+          is_chunked: false,
+          total_parts: 1,
+          telegram_chat_id: 'me',
+          file_hash: null,
+          storage_type: 'telegram',
+          local_path: null,
+          thumbnail_path: null,
+          api_key_id: null,
+          tags: ['telegram_synced'],
+          is_starred: 0,
+          is_trash: 0,
+          is_shared: 0,
+          created_at: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
+          updated_at: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
+        };
+
+        db.data.files.push(newFileRecord);
+        existingMsgIds.add(msg.id);
+        newlyIndexedCount++;
+      }
+
+      db.saveData();
+      console.log(`[Telegram Sync] Complete. Total folders: ${db.data.folders.length}, Total files: ${db.data.files.length} (${newlyIndexedCount} newly indexed)`);
+
+      return {
+        success: true,
+        restoredFromBackup,
+        newlyIndexedCount,
+        foldersCount: db.data.folders.length,
+        filesCount: db.data.files.length,
+        folders: db.data.folders,
+        files: db.data.files,
+      };
+    } catch (err) {
+      console.error('[Telegram Sync] Execution error:', err);
       return { success: false, error: err.message };
     }
   }

@@ -1,4 +1,5 @@
 const { db, getSetting } = require('../db');
+const telegramService = require('../services/telegramService');
 
 exports.getFolders = async (req, res) => {
   try {
@@ -6,6 +7,20 @@ exports.getFolders = async (req, res) => {
     const sessionString = String((await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
     const clientSession = String(req.headers?.['x-telegram-session'] || req.query?.session || '').trim();
     const activeSession = sessionString || clientSession;
+
+    // Auto-sync if connected and only default folders exist
+    if (!isManualDisconnected && activeSession) {
+      const customFolders = (db.data.folders || []).filter(
+        (f) => !['root_documents', 'root_media', 'root_photos'].includes(f.id)
+      );
+      if (customFolders.length === 0) {
+        try {
+          await telegramService.syncFromTelegramSavedMessages(activeSession);
+        } catch (e) {
+          // Non-blocking
+        }
+      }
+    }
 
     const folders = await db.getFolders();
     if (isManualDisconnected || !activeSession) {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, AlertCircle, Loader2, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, X, Cloud } from 'lucide-react';
 import { formatBytes } from '../utils';
 
 export default function UploadModal({
@@ -115,11 +115,11 @@ export default function UploadModal({
         </div>
       </div>
 
-      {/* Progress Bar (During Upload) */}
+      {/* Overall Progress Bar (During Upload) */}
       {isUploading && (
         <div className="w-full bg-gray-200 dark:bg-gray-800 h-1 overflow-hidden">
           <div
-            className="bg-gradient-to-r from-rose-500 to-red-600 h-full transition-all duration-300 ease-out"
+            className="bg-gradient-to-r from-rose-500 via-pink-500 to-red-600 h-full transition-all duration-300 ease-out"
             style={{ width: `${uploadProgress}%` }}
           />
         </div>
@@ -139,29 +139,74 @@ export default function UploadModal({
       )}
 
       {/* File List */}
-      <div className="p-3 max-h-52 overflow-y-auto space-y-2 divide-y divide-gray-100 dark:divide-gray-800">
-        {uploadQueue.map((item, idx) => (
-          <div key={idx} className="pt-2 first:pt-0 flex items-center justify-between gap-3 text-xs">
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-gray-800 dark:text-gray-200 truncate">{item.name}</p>
-              <p className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">{formatBytes(item.size)}</p>
-            </div>
+      <div className="p-3 max-h-56 overflow-y-auto space-y-3 divide-y divide-gray-100 dark:divide-gray-800">
+        {uploadQueue.map((item, idx) => {
+          const itemPercent = item.percent !== undefined ? item.percent : uploadProgress;
+          return (
+            <div key={idx} className="pt-2.5 first:pt-0 space-y-1.5 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-gray-800 dark:text-gray-200 truncate">{item.name}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                      {formatBytes(item.size)}
+                    </span>
+                    {item.status === 'uploading' && item.speed > 0 && (
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 font-mono font-medium">
+                        • {formatBytes(item.speed)}/s
+                      </span>
+                    )}
+                    {item.status === 'uploading' && item.timeRemaining !== null && item.timeRemaining !== undefined && item.timeRemaining > 0 && (
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                        • ~{item.timeRemaining}s left
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-            <div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {item.status === 'uploading' && (
+                    <span className="text-rose-600 dark:text-rose-400 font-mono text-xs font-bold">
+                      {itemPercent}%
+                    </span>
+                  )}
+                  {item.status === 'done' && (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                  )}
+                  {item.status === 'error' && (
+                    <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                  )}
+                </div>
+              </div>
+
+              {/* Real-time Sub-stage badge & Progress Track for active upload */}
               {item.status === 'uploading' && (
-                <span className="text-rose-600 dark:text-rose-400 font-mono text-[11px] font-bold">
-                  {uploadProgress}%
-                </span>
-              )}
-              {item.status === 'done' && (
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              )}
-              {item.status === 'error' && (
-                <AlertCircle className="w-4 h-4 text-rose-500" />
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-gray-500 dark:text-gray-400 flex items-center gap-1 font-medium">
+                      {item.stage === 'telegram' ? (
+                        <>
+                          <Cloud className="w-3 h-3 text-sky-500 animate-pulse" />
+                          <span className="text-sky-600 dark:text-sky-400 font-medium">
+                            Telegram Cloud Sync ({item.cloudPercent || 0}%)
+                          </span>
+                        </>
+                      ) : (
+                        <span>{item.stageText || 'Uploading...'}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-100 dark:bg-gray-800 h-1 rounded-full overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-rose-500 via-pink-500 to-red-600 h-full transition-all duration-200 ease-out"
+                      style={{ width: `${itemPercent}%` }}
+                    />
+                  </div>
+                </div>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <style>{`

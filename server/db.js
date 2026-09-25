@@ -570,22 +570,25 @@ class Database {
     if (!this.data.api_keys || this.data.api_keys.length === 0 || Date.now() - this.lastCloudSync > 60000) {
       await this.syncFromCloud();
     }
-    // Return keys safely with masked prefix (never expose plaintext key or raw hash)
-    return (this.data.api_keys || []).map((k) => ({
-      id: k.id,
-      name: k.name,
-      purpose: k.purpose,
-      validity: k.validity,
-      expires_at: k.expires_at,
-      folder_id: k.folder_id,
-      key: k.key_prefix || (k.key ? `${k.key.slice(0, 14)}••••••••` : '••••••••'),
-      key_prefix: k.key_prefix,
-      status: k.status,
-      total_uploads: k.total_uploads || 0,
-      last_used_at: k.last_used_at,
-      created_at: k.created_at,
-      updated_at: k.updated_at,
-    }));
+    // Return full API keys without truncating with dots
+    return (this.data.api_keys || []).map((k) => {
+      const fullKey = k.key || k.secret_key || k.key_prefix || '';
+      return {
+        id: k.id,
+        name: k.name,
+        purpose: k.purpose,
+        validity: k.validity,
+        expires_at: k.expires_at,
+        folder_id: k.folder_id,
+        key: fullKey,
+        key_prefix: fullKey,
+        status: k.status,
+        total_uploads: k.total_uploads || 0,
+        last_used_at: k.last_used_at,
+        created_at: k.created_at,
+        updated_at: k.updated_at,
+      };
+    });
   }
 
   async getApiKeyById(id) {
@@ -594,7 +597,13 @@ class Database {
       await this.syncFromCloud();
       found = (this.data.api_keys || []).find((k) => k.id === id);
     }
-    return found || null;
+    if (!found) return null;
+    const fullKey = found.key || found.secret_key || found.key_prefix || '';
+    return {
+      ...found,
+      key: fullKey,
+      key_prefix: fullKey,
+    };
   }
 
   async getApiKeyByKey(rawKey) {
@@ -640,7 +649,6 @@ class Database {
     const rawRandom = crypto.randomBytes(24).toString('hex');
     const secretKey = `htc_live_${rawRandom}`;
     const keyHash = crypto.createHash('sha256').update(secretKey).digest('hex');
-    const keyPrefix = `htc_live_${rawRandom.substring(0, 6)}...${rawRandom.slice(-4)}`;
 
     let expires_at = null;
     if (validity === '30d') {
@@ -674,8 +682,9 @@ class Database {
       validity: validity || 'never',
       expires_at,
       folder_id: targetFolder ? targetFolder.id : null,
+      key: secretKey,
       key_hash: keyHash,
-      key_prefix: keyPrefix,
+      key_prefix: secretKey,
       status: 'active', // 'active' | 'revoked'
       total_uploads: 0,
       last_used_at: null,
@@ -685,7 +694,6 @@ class Database {
     this.data.api_keys.push(newApiKey);
     this.saveData();
     await cloudDbService.saveApiKey(newApiKey);
-    // Return full key string ONLY on creation response so user can copy it once
     return {
       ...newApiKey,
       key: secretKey,

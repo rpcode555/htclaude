@@ -22,10 +22,19 @@ const { apiLimiter } = require('./middleware/rateLimitMiddleware');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Handle transient GramJS socket reconnect timeouts gracefully
+// Handle transient GramJS socket reconnect timeouts and network fluctuations gracefully
 process.on('unhandledRejection', (reason) => {
-  if (reason && (reason.message === 'TIMEOUT' || String(reason).includes('TIMEOUT'))) return;
-  console.warn('[Server Warning] Unhandled Rejection:', reason?.message || reason);
+  const msg = reason?.message || String(reason || '');
+  if (msg.includes('TIMEOUT') || msg.includes('Not connected') || msg.includes('hanging states') || msg.includes('ECONNRESET')) return;
+  console.warn('[Server Warning] Unhandled Rejection:', msg);
+});
+
+process.on('uncaughtException', (err) => {
+  const msg = err?.message || String(err || '');
+  if (msg.includes('TIMEOUT') || msg.includes('Not connected') || msg.includes('hanging states') || msg.includes('ECONNRESET')) {
+    return;
+  }
+  console.error('[Server Error] Uncaught Exception:', err);
 });
 
 // Security Headers Middleware
@@ -76,6 +85,18 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // Global Rate Limiting on API endpoints
 app.use('/api', apiLimiter, apiRoutes);
+
+// Support serverless environments where Vercel rewrite might strip /api prefix
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/favicon.ico') {
+    return next();
+  }
+  const apiPrefixes = ['/folders', '/files', '/auth', '/developer', '/stats', '/v1', '/config'];
+  if (apiPrefixes.some((prefix) => req.path.startsWith(prefix))) {
+    return apiRoutes(req, res, next);
+  }
+  next();
+});
 
 // Health check
 app.get('/health', (req, res) => {

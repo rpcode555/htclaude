@@ -49,6 +49,7 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createdKeyData, setCreatedKeyData] = useState(null);
 
   // New key form fields
   const [newKeyName, setNewKeyName] = useState('');
@@ -125,14 +126,15 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
         purpose: newKeyPurpose,
         validity: newKeyValidity,
       });
-      if (res.success) {
+      if (res.success && res.key) {
         setNewKeyName('');
         setNewKeyPurpose('web');
         setNewKeyValidity('never');
-        setShowCreateModal(false);
+        setCreatedKeyData(res.key);
         await loadKeys();
-        if (res.key?.key) {
+        if (res.key.key) {
           setSelectedKeyForSnippet(res.key.key);
+          setRevealedKeys((prev) => ({ ...prev, [res.key.id]: true }));
         }
       }
     } catch (err) {
@@ -209,7 +211,10 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
   };
 
   const toggleRevealKey = (id) => {
-    setRevealedKeys((prev) => ({ ...prev, [id]: !prev[id] }));
+    setRevealedKeys((prev) => ({
+      ...prev,
+      [id]: prev[id] === false ? true : false,
+    }));
   };
 
   // Active key string used in code snippets
@@ -373,7 +378,7 @@ curl -X POST \\
   if (selectedKeyRecord) {
     const purposeBadge = getPurposeBadge(selectedKeyRecord.purpose);
     const PurposeIcon = purposeBadge.icon;
-    const isRevealed = revealedKeys[selectedKeyRecord.id];
+    const isRevealed = revealedKeys[selectedKeyRecord.id] !== false;
     const isCopied = copiedKeyId === selectedKeyRecord.id;
 
     const filteredFiles = keyFilesData?.files
@@ -448,7 +453,7 @@ curl -X POST \\
             <div className="flex items-center gap-2 font-mono text-xs text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-950 px-3.5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-800 flex-1 overflow-hidden">
               <span className="text-gray-400 dark:text-gray-500 font-bold select-none">TOKEN:</span>
               <span className="truncate select-all text-rose-600 dark:text-rose-400 font-bold">
-                {isRevealed ? selectedKeyRecord.key : `${selectedKeyRecord.key.slice(0, 14)}••••••••••••••••••••••••`}
+                {isRevealed ? selectedKeyRecord.key : `${(selectedKeyRecord.key || '').slice(0, 12)}••••••••••••••••••••••••`}
               </span>
             </div>
 
@@ -809,7 +814,7 @@ curl -X POST \\
         ) : (
           <div className="space-y-3">
             {apiKeys.map((keyItem) => {
-              const isRevealed = revealedKeys[keyItem.id];
+              const isRevealed = revealedKeys[keyItem.id] !== false;
               const isCopied = copiedKeyId === keyItem.id;
               const isSelectedForSnippet = selectedKeyForSnippet === keyItem.key;
               const purposeBadge = getPurposeBadge(keyItem.purpose);
@@ -889,10 +894,10 @@ curl -X POST \\
                       title="Click to inspect this key's uploaded files"
                     >
                       <span className="text-gray-400 dark:text-gray-500 font-bold select-none">KEY:</span>
-                      <span className="truncate">
+                      <span className="truncate select-all text-rose-600 dark:text-rose-400 font-semibold font-mono">
                         {isRevealed
                           ? keyItem.key
-                          : `${keyItem.key.slice(0, 14)}••••••••••••••••••••••••`}
+                          : `${(keyItem.key || '').slice(0, 12)}••••••••••••••••••••••••`}
                       </span>
                     </div>
 
@@ -1134,88 +1139,157 @@ curl -X POST \\
             {/* Modal Header */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-500">
-                  <Key className="w-5 h-5" />
+                <div className={`w-10 h-10 rounded-2xl ${createdKeyData ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-800/60 text-emerald-500' : 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-800/60 text-rose-500'} border flex items-center justify-center`}>
+                  {createdKeyData ? <CheckCircle2 className="w-5 h-5" /> : <Key className="w-5 h-5" />}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-gray-900 dark:text-white">Create API Key</h3>
-                  <p className="text-xs text-gray-400 dark:text-gray-500">Generate credentials for your website or app</p>
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white">
+                    {createdKeyData ? 'API Key Created Successfully' : 'Create API Key'}
+                  </h3>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    {createdKeyData ? 'Your key is active and ready to use' : 'Generate credentials for your website or app'}
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setCreatedKeyData(null);
+                }}
                 className="p-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Form */}
-            <form onSubmit={handleCreateKey} className="space-y-4">
-              {/* Field 1: Name */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Key Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. My Website, Portfolio, App"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 outline-none transition-colors"
-                />
-              </div>
+            {createdKeyData ? (
+              /* Success View showing Full API Key */
+              <div className="space-y-4 animate-fade-in">
+                <div className="p-3.5 rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 space-y-1">
+                  <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 block">
+                    {createdKeyData.name}
+                  </span>
+                  <span className="text-[11px] text-emerald-600 dark:text-emerald-400 block">
+                    Linked folder created &bull; {createdKeyData.expires_at ? `Expires ${formatDate(createdKeyData.expires_at)}` : 'Never expires'}
+                  </span>
+                </div>
 
-              {/* Field 2: Purpose */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Purpose</label>
-                <select
-                  value={newKeyPurpose}
-                  onChange={(e) => setNewKeyPurpose(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 outline-none cursor-pointer"
-                >
-                  <option value="web" className="dark:bg-gray-900">Web Application (React, Next.js, Vue, Website)</option>
-                  <option value="mobile" className="dark:bg-gray-900">Mobile Application (iOS, Android, Flutter)</option>
-                  <option value="backend" className="dark:bg-gray-900">Backend Server / API</option>
-                  <option value="desktop" className="dark:bg-gray-900">Desktop / Others</option>
-                </select>
-              </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Your Full API Key</label>
+                  <div className="p-3.5 rounded-xl bg-gray-100 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 font-mono text-xs text-rose-600 dark:text-rose-400 font-bold break-all select-all">
+                    {createdKeyData.key}
+                  </div>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500">
+                    This full key is permanently saved and will remain visible and copyable in your dashboard.
+                  </p>
+                </div>
 
-              {/* Field 3: Validity */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Expiration</label>
-                <select
-                  value={newKeyValidity}
-                  onChange={(e) => setNewKeyValidity(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 outline-none cursor-pointer"
-                >
-                  <option value="never" className="dark:bg-gray-900">Permanent (Never Expires)</option>
-                  <option value="30d" className="dark:bg-gray-900">30 Days</option>
-                  <option value="90d" className="dark:bg-gray-900">90 Days</option>
-                  <option value="180d" className="dark:bg-gray-900">180 Days</option>
-                  <option value="365d" className="dark:bg-gray-900">1 Year</option>
-                </select>
-              </div>
+                <div className="flex items-center gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(createdKeyData.key);
+                      setCopiedKeyId(createdKeyData.id);
+                      setTimeout(() => setCopiedKeyId(null), 2000);
+                    }}
+                    className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {copiedKeyId === createdKeyData.id ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-300" />
+                        <span>Copied to Clipboard!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>Copy Full API Key</span>
+                      </>
+                    )}
+                  </button>
 
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creating || !newKeyName.trim()}
-                  className="btn-primary px-5 py-2.5 rounded-xl disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-2"
-                >
-                  {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                  <span>Create API Key</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateModal(false);
+                      setCreatedKeyData(null);
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
-            </form>
+            ) : (
+              /* Form */
+              <form onSubmit={handleCreateKey} className="space-y-4">
+                {/* Field 1: Name */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Key Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. My Website, Portfolio, App"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 outline-none transition-colors"
+                  />
+                </div>
+
+                {/* Field 2: Purpose */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Purpose</label>
+                  <select
+                    value={newKeyPurpose}
+                    onChange={(e) => setNewKeyPurpose(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 outline-none cursor-pointer"
+                  >
+                    <option value="web" className="dark:bg-gray-900">Web Application (React, Next.js, Vue, Website)</option>
+                    <option value="mobile" className="dark:bg-gray-900">Mobile Application (iOS, Android, Flutter)</option>
+                    <option value="backend" className="dark:bg-gray-900">Backend Server / API</option>
+                    <option value="desktop" className="dark:bg-gray-900">Desktop / Others</option>
+                  </select>
+                </div>
+
+                {/* Field 3: Validity */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Expiration</label>
+                  <select
+                    value={newKeyValidity}
+                    onChange={(e) => setNewKeyValidity(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 focus:border-rose-500 text-sm text-gray-900 dark:text-gray-100 outline-none cursor-pointer"
+                  >
+                    <option value="never" className="dark:bg-gray-900">Permanent (Never Expires)</option>
+                    <option value="30d" className="dark:bg-gray-900">30 Days</option>
+                    <option value="90d" className="dark:bg-gray-900">90 Days</option>
+                    <option value="180d" className="dark:bg-gray-900">180 Days</option>
+                    <option value="365d" className="dark:bg-gray-900">1 Year</option>
+                  </select>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateModal(false);
+                      setCreatedKeyData(null);
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creating || !newKeyName.trim()}
+                    className="btn-primary px-5 py-2.5 rounded-xl disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    <span>Create API Key</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

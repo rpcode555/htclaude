@@ -162,17 +162,43 @@ function MainApp() {
     }
   };
 
+  const [isSyncingTelegram, setIsSyncingTelegram] = useState(false);
+
+  const handleSyncTelegram = async () => {
+    if (!authStatus?.connected && !localStorage.getItem('htc_tg_session')) {
+      showToast('⚠️ First connect Telegram! Open Settings to link your account.');
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setIsSyncingTelegram(true);
+    showToast('🔄 Syncing files & folders from Telegram Cloud...');
+    try {
+      const res = await api.syncTelegram();
+      if (res.success) {
+        showToast(`✅ Synced with Telegram! ${res.foldersCount || 0} folders, ${res.filesCount || 0} files.`);
+      } else {
+        showToast(res.error || 'Sync completed.');
+      }
+      await Promise.all([loadData(), loadFiles()]);
+    } catch (e) {
+      showToast('❌ Sync failed: ' + (e.message || 'Network error'));
+    } finally {
+      setIsSyncingTelegram(false);
+    }
+  };
+
   useEffect(() => {
     if (isAuthorized) {
       loadData();
     }
-  }, [isAuthorized]);
+  }, [isAuthorized, authStatus?.connected]);
 
   useEffect(() => {
     if (isAuthorized) {
       loadFiles();
     }
-  }, [isAuthorized, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
+  }, [isAuthorized, authStatus?.connected, currentView, selectedCategory, currentFolderId, debouncedSearch, sortBy, sortOrder]);
 
   // Real-time background sync interval (checks every 5s for live updates across devices/tabs)
   // Uses silent=true so it never triggers skeleton loaders during background refresh
@@ -239,8 +265,21 @@ function MainApp() {
           if (progress.fileIndex !== undefined) {
             setUploadQueue((prev) =>
               prev.map((item, idx) => {
-                if (idx < progress.fileIndex) return { ...item, status: 'done' };
-                if (idx === progress.fileIndex) return { ...item, status: 'uploading' };
+                if (idx < progress.fileIndex) return { ...item, status: 'done', percent: 100 };
+                if (idx === progress.fileIndex) {
+                  return {
+                    ...item,
+                    status: 'uploading',
+                    percent: progress.filePercent !== undefined ? progress.filePercent : progress.percent,
+                    cloudPercent: progress.cloudPercent,
+                    stage: progress.stage,
+                    stageText: progress.stageText,
+                    speed: progress.speed,
+                    timeRemaining: progress.timeRemaining,
+                    loaded: progress.loaded,
+                    total: progress.total,
+                  };
+                }
                 return item;
               })
             );
@@ -256,7 +295,11 @@ function MainApp() {
             });
           }
           setUploadQueue((prev) =>
-            prev.map((item, idx) => (idx === fileIndex ? { ...item, status: 'done' } : item))
+            prev.map((item, idx) =>
+              idx === fileIndex
+                ? { ...item, status: 'done', percent: 100, stage: 'completed', stageText: 'Completed!' }
+                : item
+            )
           );
         }
       );
@@ -680,6 +723,8 @@ function MainApp() {
             onUploadTrigger={triggerUpload}
             onNewFileClick={handleNewFileClick}
             onShareFile={handleCopyShareLink}
+            onSyncTelegram={handleSyncTelegram}
+            isSyncingTelegram={isSyncingTelegram}
             isDragOver={isDragOver}
           />
         )}

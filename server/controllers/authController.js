@@ -98,6 +98,13 @@ exports.verifyCode = async (req, res) => {
     }
 
     const result = await telegramService.verifyPhoneCode(code, password, phoneCodeHash, phoneNumber, tempSession);
+    if (result && (result.success || result.status === 'success') && result.sessionString) {
+      try {
+        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
+      } catch (syncErr) {
+        console.warn('[Auth] Auto sync after phone login notice:', syncErr.message);
+      }
+    }
     res.json(result);
   } catch (err) {
     console.error('[Auth] verifyCode error:', err);
@@ -125,6 +132,13 @@ exports.connectSessionString = async (req, res) => {
     }
 
     const result = await telegramService.connectSessionString(apiId, apiHash, sessionString);
+    if (result && result.success && result.sessionString) {
+      try {
+        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
+      } catch (syncErr) {
+        console.warn('[Auth] Auto sync after session connect notice:', syncErr.message);
+      }
+    }
     res.json(result);
   } catch (err) {
     console.error('[Auth] connectSessionString error:', err);
@@ -156,10 +170,36 @@ exports.checkQrCode = async (req, res) => {
     if (!apiHash) apiHash = await getSetting('api_hash');
 
     const result = await telegramService.checkQrCode(tempSession, password, apiId, apiHash);
+    if (result && (result.success || result.status === 'success') && result.sessionString) {
+      try {
+        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
+      } catch (syncErr) {
+        console.warn('[Auth] Auto sync after QR login notice:', syncErr.message);
+      }
+    }
     res.json(result);
   } catch (err) {
     console.error('[Auth] checkQrCode error:', err);
     res.status(400).json({ success: false, error: err.message || 'Failed to check QR login status.' });
+  }
+};
+
+exports.syncTelegram = async (req, res) => {
+  try {
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const sessionString = (await getSetting('session_string')) || clientSession || process.env.TELEGRAM_SESSION_STRING || '';
+    if (!sessionString) {
+      return res.status(400).json({
+        success: false,
+        error: 'Telegram account is not connected. Please connect your Telegram account first.',
+      });
+    }
+
+    const result = await telegramService.syncFromTelegramSavedMessages(sessionString);
+    res.json(result);
+  } catch (err) {
+    console.error('[Auth] syncTelegram error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 

@@ -24,6 +24,7 @@ server/temp_uploads/
 server/uploads/cache/
 server/data/*.tmp
 server/data/*.json
+!server/data/telecloud_db.json
 
 # IDE, Logs, OS
 .DS_Store

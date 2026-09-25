@@ -117,6 +117,8 @@ router.post('/auth/verify-code', authLimiter, requireAdminAuth, authController.v
 router.post('/auth/qr-code', apiLimiter, requireAdminAuth, authController.getQrCode);
 router.post('/auth/check-qr', apiLimiter, requireAdminAuth, authController.checkQrCode);
 router.post('/auth/session-connect', authLimiter, requireAdminAuth, authController.connectSessionString);
+router.post('/auth/sync-telegram', apiLimiter, requireAdminAuth, authController.syncTelegram);
+router.get('/auth/sync-telegram', apiLimiter, requireAdminAuth, authController.syncTelegram);
 router.post('/auth/backup-db', requireAdminAuth, authController.backupDatabase);
 router.post('/auth/disconnect', requireAdminAuth, authController.disconnect);
 router.post('/auth/settings', requireAdminAuth, authController.updateSettings);
@@ -132,6 +134,7 @@ router.post('/folders/:id/restore', requireAdminAuth, folderController.restoreFo
 router.get('/files', requireAdminAuth, fileController.listFiles);
 router.get('/files/:id', requireAdminAuth, fileController.getFile);
 router.post('/files/upload', uploadLimiter, requireAdminAuth, upload.any(), fileController.uploadFiles);
+router.get('/files/upload-progress/:uploadId', fileController.getUploadProgress);
 router.post('/files/create', requireAdminAuth, fileController.createNoteFile);
 router.put('/files/:id/content', requireAdminAuth, fileController.updateFileContent);
 router.get('/files/:id/download', requireAdminAuth, fileController.downloadFile);

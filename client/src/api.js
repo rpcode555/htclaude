@@ -189,6 +189,15 @@ export const api = {
     return data;
   },
 
+  async syncTelegram() {
+    const headers = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/auth/sync-telegram`, {
+      method: 'POST',
+      headers,
+    });
+    return await safeJson(res);
+  },
+
   async backupDatabase() {
     const headers = await getAuthHeader();
     const res = await fetch(`${API_BASE}/auth/backup-db`, {
@@ -320,28 +329,109 @@ export const api = {
     }
 
     return new Promise((resolve, reject) => {
+      const uploadId = 'up_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
       const xhr = new XMLHttpRequest();
       const formData = new FormData();
       formData.append('files', file);
+      formData.append('upload_id', uploadId);
       if (folder_id) {
         formData.append('folder_id', folder_id);
       }
 
       xhr.timeout = 0; // 0 = No timeout for unlimited multi-GB file uploads
 
+      let progressInterval = null;
+      let isCompleted = false;
+
+      // Start polling backend for Telegram Cloud progress once client->server finishes
+      const startPollingCloudProgress = () => {
+        if (progressInterval) return;
+        progressInterval = setInterval(async () => {
+          if (isCompleted) {
+            clearInterval(progressInterval);
+            return;
+          }
+          try {
+            const authHeader = await getAuthHeader();
+            const res = await fetch(`${API_BASE}/files/upload-progress/${uploadId}`, {
+              headers: { ...authHeader },
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data?.success && data?.progress) {
+              const p = data.progress;
+              if (onProgress && !isCompleted) {
+                onProgress({
+                  loaded: p.loadedBytes || 0,
+                  total: p.totalSize || file.size,
+                  percent: p.overallPercent || 15,
+                  cloudPercent: p.cloudPercent || 0,
+                  stage: p.stage,
+                  stageText: p.stageText,
+                  speed: p.speed || 0,
+                  timeRemaining: p.timeRemaining,
+                });
+              }
+            }
+          } catch (e) {
+            // Non-blocking
+          }
+        }, 300);
+      };
+
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable && onProgress) {
-          const percentComplete = (e.loaded / e.total) * 100;
-          onProgress({
-            loaded: e.loaded,
-            total: e.total,
-            percent: Math.round(percentComplete),
-          });
+          const clientPercent = Math.round((e.loaded / e.total) * 100);
+          if (clientPercent < 100) {
+            // Client is transmitting to local server (0% - 10% overall)
+            const initialOverall = Math.min(10, Math.round(clientPercent * 0.1));
+            onProgress({
+              loaded: e.loaded,
+              total: e.total,
+              percent: initialOverall,
+              clientPercent,
+              cloudPercent: 0,
+              stage: 'server',
+              stageText: `Sending to server... ${clientPercent}%`,
+              speed: 0,
+              timeRemaining: null,
+            });
+          } else {
+            // Reached 100% of local upload, now syncing to Telegram Cloud!
+            onProgress({
+              loaded: e.loaded,
+              total: e.total,
+              percent: 10,
+              clientPercent: 100,
+              cloudPercent: 0,
+              stage: 'cloud',
+              stageText: 'Syncing to Telegram Cloud...',
+              speed: 0,
+              timeRemaining: null,
+            });
+            startPollingCloudProgress();
+          }
         }
       });
 
       xhr.addEventListener('load', () => {
+        isCompleted = true;
+        if (progressInterval) clearInterval(progressInterval);
+
         if (xhr.status >= 200 && xhr.status < 300) {
+          if (onProgress) {
+            onProgress({
+              loaded: file.size,
+              total: file.size,
+              percent: 100,
+              clientPercent: 100,
+              cloudPercent: 100,
+              stage: 'completed',
+              stageText: 'Upload completed!',
+              speed: 0,
+              timeRemaining: 0,
+            });
+          }
           try {
             resolve(JSON.parse(xhr.responseText));
           } catch (e) {
@@ -358,12 +448,18 @@ export const api = {
       });
 
       xhr.addEventListener('error', () => {
+        isCompleted = true;
+        if (progressInterval) clearInterval(progressInterval);
         reject(new Error('Connection interrupted or network error during upload. Please check your connection and server status.'));
       });
       xhr.addEventListener('timeout', () => {
+        isCompleted = true;
+        if (progressInterval) clearInterval(progressInterval);
         reject(new Error('Upload timed out. The file might be too large or the connection is too slow.'));
       });
       xhr.addEventListener('abort', () => {
+        isCompleted = true;
+        if (progressInterval) clearInterval(progressInterval);
         reject(new Error('Upload was aborted.'));
       });
 
@@ -371,6 +467,7 @@ export const api = {
       if (token) {
         xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       }
+      xhr.setRequestHeader('X-Upload-Id', uploadId);
       const tgSession = localStorage.getItem('htc_tg_session');
       if (tgSession) {
         xhr.setRequestHeader('X-Telegram-Session', tgSession);
@@ -395,6 +492,13 @@ export const api = {
             currentFileName: currentFile.name,
             filePercent: fileProgress.percent,
             percent: overallPercent,
+            cloudPercent: fileProgress.cloudPercent,
+            stage: fileProgress.stage,
+            stageText: fileProgress.stageText,
+            speed: fileProgress.speed,
+            timeRemaining: fileProgress.timeRemaining,
+            loaded: fileProgress.loaded,
+            total: fileProgress.total,
           });
         }
       });

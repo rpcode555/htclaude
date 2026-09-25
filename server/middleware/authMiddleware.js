@@ -75,6 +75,7 @@ async function verifyAdminToken(idToken) {
   if (!decoded) return null;
 
   const userEmail = (decoded.email || '').trim().toLowerCase();
+  const userPhone = (decoded.phone_number || '').trim();
   const userId = decoded.user_id || decoded.sub;
 
   // Check if token is expired
@@ -119,15 +120,20 @@ async function verifyAdminToken(idToken) {
     return null;
   }
 
-  // Verify email is in authorized list
-  if (!isEmailAuthorized(userEmail)) {
-    console.warn(`[Security Alert] Blocked unauthorized email: ${userEmail}`);
+  // Verify email or phone authorization
+  if (userEmail) {
+    if (!isEmailAuthorized(userEmail)) {
+      console.warn(`[Security Alert] Blocked unauthorized email: ${userEmail}`);
+      return null;
+    }
+  } else if (!userPhone && !userId) {
     return null;
   }
 
   const userData = {
     uid: userId || 'admin',
-    email: userEmail,
+    email: userEmail || `${userPhone || 'admin'}@telegram.auth`,
+    phone: userPhone,
     expiry: Date.now() + 5 * 60 * 1000,
   };
 

@@ -41,6 +41,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   // Status & Feedback
   const [loading, setLoading] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -85,7 +86,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
           if (res.sessionString) {
             localStorage.setItem('htc_tg_session', res.sessionString);
           }
-          setSuccessMsg('Successfully linked Telegram Saved Messages via QR Code!');
+          setSuccessMsg('Successfully linked Telegram Saved Messages via QR Code! Syncing files...');
+          try {
+            await api.syncTelegram();
+          } catch (e) {}
           await onRefreshStatus();
         } else if (res.status === 'requires2FA') {
           stopQrPolling();
@@ -147,7 +151,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         if (res.sessionString) {
           localStorage.setItem('htc_tg_session', res.sessionString);
         }
-        setSuccessMsg('Successfully logged into Telegram Saved Messages!');
+        setSuccessMsg('Successfully logged into Telegram Saved Messages! Syncing files...');
+        try {
+          await api.syncTelegram();
+        } catch (e) {}
         await onRefreshStatus();
       } else {
         setErrorMsg(res.error || 'Invalid 2FA password.');
@@ -241,7 +248,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         if (res.sessionString) {
           localStorage.setItem('htc_tg_session', res.sessionString);
         }
-        setSuccessMsg('Successfully connected to Telegram Saved Messages!');
+        setSuccessMsg('Successfully connected to Telegram Saved Messages! Syncing files & folders...');
+        try {
+          await api.syncTelegram();
+        } catch (e) {}
         await onRefreshStatus();
       } else {
         setErrorMsg(res.error || 'Invalid code.');
@@ -267,7 +277,10 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         if (sess) {
           localStorage.setItem('htc_tg_session', sess);
         }
-        setSuccessMsg(`Successfully connected to Telegram Saved Messages!`);
+        setSuccessMsg(`Successfully connected to Telegram Saved Messages! Syncing files & folders...`);
+        try {
+          await api.syncTelegram();
+        } catch (e) {}
         await onRefreshStatus();
       } else {
         setErrorMsg(res.error || 'Failed to connect using session string.');
@@ -296,6 +309,27 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
       setErrorMsg(err.message || 'Backup failed.');
     } finally {
       setBackingUp(false);
+    }
+  };
+
+  // Sync Telegram Files & Folders Handler
+  const handleSyncFromTelegram = async () => {
+    setSyncing(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      const res = await api.syncTelegram();
+      if (res.success) {
+        setSuccessMsg(res.message || `Successfully synced ${res.filesCount || 0} files and ${res.foldersCount || 0} folders from Telegram!`);
+        await onRefreshStatus();
+      } else {
+        setErrorMsg(res.error || 'Failed to sync with Telegram.');
+      }
+    } catch (err) {
+      setErrorMsg(err.message || 'Sync failed.');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -457,14 +491,23 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 pt-1">
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      onClick={handleSyncFromTelegram}
+                      disabled={syncing}
+                      className="btn-primary flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                      <span>{syncing ? 'Syncing...' : 'Sync Files & Folders from Telegram'}</span>
+                    </button>
+
                     <button
                       onClick={handleBackupDb}
                       disabled={backingUp}
-                      className="btn-primary flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+                      className="btn-secondary flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer dark:bg-gray-800 dark:border-gray-700"
                     >
                       <Database className="w-3.5 h-3.5" />
-                      <span>{backingUp ? 'Backing Up...' : 'Backup Database to Saved Messages'}</span>
+                      <span>{backingUp ? 'Backing Up...' : 'Backup Database'}</span>
                     </button>
                   </div>
 
