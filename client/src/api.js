@@ -96,10 +96,18 @@ export const api = {
     const url = tgSession ? `${API_BASE}/auth/status?session=${encodeURIComponent(tgSession)}` : `${API_BASE}/auth/status`;
     const res = await fetch(url, { headers });
     const data = await safeJson(res);
-    if (data?.connected && data?.sessionString) {
-      localStorage.setItem('htc_tg_session', data.sessionString);
+    if (data?.connected) {
+      if (data?.sessionString) {
+        localStorage.setItem('htc_tg_session', data.sessionString);
+      }
+      if (data?.user) {
+        try {
+          localStorage.setItem('htc_tg_user', JSON.stringify(data.user));
+        } catch (e) {}
+      }
     } else if (data?.manualDisconnect) {
       localStorage.removeItem('htc_tg_session');
+      localStorage.removeItem('htc_tg_user');
     }
     return data;
   },
@@ -133,6 +141,11 @@ export const api = {
     const data = await safeJson(res);
     if ((data.success || data.status === 'success') && data.sessionString) {
       localStorage.setItem('htc_tg_session', data.sessionString);
+      if (data.user) {
+        try {
+          localStorage.setItem('htc_tg_user', JSON.stringify(data.user));
+        } catch (e) {}
+      }
     }
     return data;
   },
@@ -157,6 +170,11 @@ export const api = {
     const data = await safeJson(res);
     if ((data.success || data.status === 'success') && data.sessionString) {
       localStorage.setItem('htc_tg_session', data.sessionString);
+      if (data.user) {
+        try {
+          localStorage.setItem('htc_tg_user', JSON.stringify(data.user));
+        } catch (e) {}
+      }
     }
     return data;
   },
@@ -185,6 +203,11 @@ export const api = {
     if (data.success) {
       const sess = data.sessionString || (typeof sessionString === 'string' ? sessionString : body.sessionString);
       if (sess) localStorage.setItem('htc_tg_session', sess);
+      if (data.user) {
+        try {
+          localStorage.setItem('htc_tg_user', JSON.stringify(data.user));
+        } catch (e) {}
+      }
     }
     return data;
   },
@@ -210,6 +233,7 @@ export const api = {
   async disconnect() {
     const headers = await getAuthHeader();
     localStorage.removeItem('htc_tg_session');
+    localStorage.removeItem('htc_tg_user');
     const res = await fetch(`${API_BASE}/auth/disconnect`, {
       method: 'POST',
       headers,

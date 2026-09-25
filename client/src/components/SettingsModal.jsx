@@ -359,7 +359,15 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     }
   };
 
-  const isUserConnected = authStatus?.authType === 'saved_messages' && authStatus?.connected;
+  const hasLocalSession = !!localStorage.getItem('htc_tg_session');
+  const isUserConnected = !authStatus?.manualDisconnect && (authStatus?.connected || hasLocalSession);
+
+  let cachedUser = null;
+  try {
+    const raw = localStorage.getItem('htc_tg_user');
+    if (raw) cachedUser = JSON.parse(raw);
+  } catch (e) {}
+  const displayUser = authStatus?.user || cachedUser;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 md:p-6 animate-fade-in select-none">
@@ -450,13 +458,13 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                       </div>
                       <div>
                         <h4 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                          <span>Connected as {authStatus?.user?.firstName || 'Telegram User'}</span>
+                          <span>Connected as {displayUser?.firstName || 'Telegram User'}</span>
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-bold">
                             Active
                           </span>
                         </h4>
                         <p className="text-xs text-emerald-700 dark:text-emerald-400 font-mono mt-0.5">
-                          {authStatus?.user?.username ? `@${authStatus.user.username}` : (authStatus?.user?.phone || 'Saved Messages')}
+                          {displayUser?.username ? `@${displayUser.username}` : (displayUser?.phone || 'Saved Messages')}
                         </p>
                       </div>
                     </div>

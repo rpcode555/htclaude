@@ -291,8 +291,10 @@ class TelegramService {
       };
     }
 
-    if (!isManualDisconnected) {
-      await this.ensureClient(sessionString);
+    if (!isManualDisconnected && hasSession) {
+      this.ensureClient(sessionString).catch((e) => {
+        console.warn('[Telegram] Background client ensure notice:', e.message);
+      });
     }
 
     const apiId = await getSetting('api_id');
@@ -300,10 +302,10 @@ class TelegramService {
 
     if (this.client && !isManualDisconnected) {
       try {
-        // 5-second timeout safeguard on getMe so cold-starts or network delays never freeze the response
+        // 3-second timeout safeguard on getMe so cold-starts or network delays never freeze the response
         const me = await Promise.race([
           this.client.getMe(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('getMe timeout')), 5000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('getMe timeout')), 3000)),
         ]);
         if (me) {
           userDetails = {
@@ -328,7 +330,8 @@ class TelegramService {
     }
 
     const activeSession = this.client?.session?.save?.() || sessionString || '';
-    const isConnected = !!userDetails || (!!this.client && hasSession && !isManualDisconnected);
+    // If the user has a valid Telegram session string and has not manually clicked Disconnect, THEY ARE LOGGED IN!
+    const isConnected = !isManualDisconnected && (hasSession || !!userDetails || (!!this.client && this.client.connected));
 
     return {
       connected: isConnected,
@@ -336,9 +339,9 @@ class TelegramService {
       configuredType: 'saved_messages',
       sessionString: isConnected ? activeSession : '',
       user: userDetails || this._cachedUserDetails || {
-        firstName: isManualDisconnected ? 'Disconnected' : 'Guest User',
+        firstName: isManualDisconnected ? 'Disconnected' : 'Telegram User',
         username: '',
-        target: 'Saved Messages (Offline / Sandbox)',
+        target: 'Saved Messages (me)',
       },
       hasCredentials: {
         hasApiId: !!apiId,

@@ -54,7 +54,26 @@ function MainApp() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [stats, setStats] = useState(null);
-  const [authStatus, setAuthStatus] = useState(null);
+  const [authStatus, setAuthStatus] = useState(() => {
+    try {
+      const savedSession = localStorage.getItem('htc_tg_session');
+      if (savedSession && savedSession.length > 20) {
+        let user = { firstName: 'Telegram User', target: 'Saved Messages (me)' };
+        const savedUser = localStorage.getItem('htc_tg_user');
+        if (savedUser) {
+          try { user = JSON.parse(savedUser); } catch (e) {}
+        }
+        return {
+          connected: true,
+          authType: 'saved_messages',
+          configuredType: 'saved_messages',
+          sessionString: savedSession,
+          user,
+        };
+      }
+    } catch (e) {}
+    return null;
+  });
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
 
@@ -111,7 +130,14 @@ function MainApp() {
         api.getStats(),
       ]);
 
-      if (statusRes.success) setAuthStatus(statusRes);
+      if (statusRes.success) {
+        setAuthStatus(statusRes);
+        if (statusRes.connected && statusRes.user) {
+          try {
+            localStorage.setItem('htc_tg_user', JSON.stringify(statusRes.user));
+          } catch (e) {}
+        }
+      }
       if (foldersRes.success) setFolders(foldersRes.folders);
       if (statsRes.success) setStats(statsRes.stats);
     } catch (err) {
@@ -236,7 +262,8 @@ function MainApp() {
   };
 
   const triggerUpload = () => {
-    if (!authStatus?.connected) {
+    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
+    if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
       return;
@@ -245,7 +272,8 @@ function MainApp() {
   };
 
   const handleNewFileClick = () => {
-    if (!authStatus?.connected) {
+    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
+    if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before creating files.');
       setIsSettingsOpen(true);
       return;
@@ -257,7 +285,8 @@ function MainApp() {
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
 
-    if (!authStatus?.connected) {
+    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
+    if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -382,7 +411,8 @@ function MainApp() {
     dragCounter.current = 0;
     setIsDragOver(false);
 
-    if (!authStatus?.connected) {
+    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
+    if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
       return;

@@ -51,13 +51,11 @@ router.use(async (req, res, next) => {
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     if (clientSession && clientSession.length > 20) {
       const { getSetting, setSetting } = require('../db');
-      const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
-      if (!isManualDisconnected) {
-        const currentSession = await getSetting('session_string');
-        if (!currentSession || currentSession !== clientSession) {
-          await setSetting('session_string', clientSession);
-          await setSetting('auth_type', 'saved_messages');
-        }
+      const currentSession = await getSetting('session_string');
+      if (!currentSession || currentSession !== clientSession) {
+        await setSetting('session_string', clientSession);
+        await setSetting('manual_disconnect', false);
+        await setSetting('auth_type', 'saved_messages');
       }
     }
   } catch (e) {
