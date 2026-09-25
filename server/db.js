@@ -1113,17 +1113,15 @@ class Database {
   /**
    * Drop file metadata whose Telegram messages were authoritatively confirmed
    * as gone, recording tombstones so a stale cloud copy cannot bring them back.
+   * `fileIds` are file record ids (the caller has already proven, by complete
+   * scan or explicit id lookup, that the backing messages no longer exist).
    * Returns the removed file ids.
    */
-  purgeMissingTelegramFiles(fileIds) {
+  purgeFilesByIds(fileIds) {
     const targets = new Set((fileIds || []).filter(Boolean));
     if (targets.size === 0) return [];
 
-    const removed = (this.data.files || []).filter(
-      (f) =>
-        f.telegram_msg_id != null &&
-        (targets.has(f.telegram_msg_id) || (Array.isArray(f.telegram_chunk_ids) && f.telegram_chunk_ids.some((cid) => targets.has(cid))))
-    );
+    const removed = (this.data.files || []).filter((f) => f.id && targets.has(f.id));
     if (removed.length === 0) return [];
 
     const removedIds = new Set(removed.map((f) => f.id));

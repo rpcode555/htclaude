@@ -578,3 +578,4 @@ module.exports = instance;
 module.exports.FirestoreService = FirestoreService;
 module.exports.toFirestore = toFirestore;
 module.exports.fromFirestore = fromFirestore;
+module.exports.ensureDotenvLoaded = ensureDotenvLoaded;

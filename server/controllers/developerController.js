@@ -459,6 +459,18 @@ async function resolveFileAccess(req, file) {
     };
   }
 
+  // A real admin (Firebase ID token) takes precedence over a developer key so a
+  // request that carries both headers is not accidentally downgraded.
+  const adminToken = (bearerToken && !bearerToken.startsWith(KEY_PREFIX) ? bearerToken : null) || explicitAdminToken;
+  if (adminToken) {
+    if (adminToken.startsWith(KEY_PREFIX)) {
+      return { authorized: false, reason: 'Invalid authentication token.' };
+    }
+    const verified = await verifyAdminToken(adminToken);
+    if (verified) return { authorized: true, via: 'admin' };
+    return { authorized: false, reason: 'Invalid or expired authentication token.' };
+  }
+
   const developerKey = extractRawKey(req);
   if (developerKey.key) {
     if (!developerKey.key.startsWith(KEY_PREFIX)) {
@@ -479,16 +491,6 @@ async function resolveFileAccess(req, file) {
       return { authorized: true, via: 'api-key' };
     }
     return { authorized: false, reason: 'This API Key is not allowed to access that file.' };
-  }
-
-  const adminToken = bearerToken || explicitAdminToken;
-  if (adminToken) {
-    if (adminToken.startsWith(KEY_PREFIX)) {
-      return { authorized: false, reason: 'Invalid authentication token.' };
-    }
-    const verified = await verifyAdminToken(adminToken);
-    if (verified) return { authorized: true, via: 'admin' };
-    return { authorized: false, reason: 'Invalid or expired authentication token.' };
   }
 
   return { authorized: false, reason: 'Authentication required.' };
@@ -532,11 +534,16 @@ function weakETag(file) {
   return `W/"${file.id}-${stamp}"`;
 }
 
-function applyDeliveryHeaders(res, file, { isExecutableMime }) {
+function applyDeliveryHeaders(res, file, { isExecutableMime, isPublicAsset }) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, ETag');
-  res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
+  // Only genuinely public assets may be stored by a shared/CDN cache; anything
+  // served to an authenticated admin must stay private.
+  res.setHeader(
+    'Cache-Control',
+    isPublicAsset ? 'public, max-age=86400, must-revalidate' : 'private, no-store, max-age=0'
+  );
   res.setHeader('ETag', weakETag(file));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (isExecutableMime) res.setHeader('Content-Security-Policy', XSS_CSP_HEADER);
@@ -545,9 +552,9 @@ function applyDeliveryHeaders(res, file, { isExecutableMime }) {
 /**
  * Stream a file payload with correct range / conditional-request handling.
  */
-function sendFilePayload(req, res, file, streamData, { download = false } = {}) {
+function sendFilePayload(req, res, file, streamData, { download = false, isPublicAsset = false } = {}) {
   const isExecutableMime = EXECUTABLE_MIME_TYPES.includes(String(file.mime_type || '').toLowerCase());
-  applyDeliveryHeaders(res, file, { isExecutableMime });
+  applyDeliveryHeaders(res, file, { isExecutableMime, isPublicAsset });
 
   const mimeType = file.mime_type || streamData.mimeType || 'application/octet-stream';
   const totalSize = Number(streamData.size) || 0;
@@ -563,43 +570,42 @@ function sendFilePayload(req, res, file, streamData, { download = false } = {}) 
     res.setHeader('Content-Disposition', contentDispositionFor(file.original_name || file.name));
   }
   res.setHeader('Content-Type', mimeType);
-  res.setHeader('Accept-Ranges', 'bytes');
   if (totalSize > 0) res.setHeader('Content-Length', String(totalSize));
 
   // Range requests are only possible when the bytes are on local disk.
   const localPath = streamData.localPath;
-  const canServeRanges =
-    !download &&
-    !!localPath &&
-    isSafePath(localPath) &&
-    fs.existsSync(localPath) &&
-    (() => {
-      try {
-        return fs.statSync(localPath).size > 0;
-      } catch (e) {
-        return false;
-      }
-    })();
+  let localFileSize = 0;
+  if (localPath && isSafePath(localPath) && fs.existsSync(localPath)) {
+    try {
+      localFileSize = fs.statSync(localPath).size;
+    } catch (e) {
+      localFileSize = 0;
+    }
+  }
+  const canServeRanges = !download && localFileSize > 0;
+
+  // Only advertise range support when a range can actually be honoured.
+  res.setHeader('Accept-Ranges', canServeRanges ? 'bytes' : 'none');
 
   if (canServeRanges) {
-    const fileSize = fs.statSync(localPath).size;
-    const range = parseRangeHeader(req.headers.range, fileSize);
+    const range = parseRangeHeader(req.headers.range, localFileSize);
 
     if (range && range.unsatisfiable) {
       res.removeHeader('Content-Length');
-      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      res.setHeader('Content-Range', `bytes */${localFileSize}`);
       return res.status(416).end();
     }
 
     if (range && Number.isFinite(range.start)) {
       const headers = {
-        'Content-Range': `bytes ${range.start}-${range.end}/${fileSize}`,
+        'Content-Range': `bytes ${range.start}-${range.end}/${localFileSize}`,
         'Content-Length': String(range.end - range.start + 1),
         'Content-Type': mimeType,
-        'Cache-Control': res.getHeader('Cache-Control') || 'public, max-age=86400, must-revalidate',
+        'Cache-Control': res.getHeader('Cache-Control') || 'private, no-store, max-age=0',
         ETag: weakETag(file),
         'X-Content-Type-Options': 'nosniff',
         'Access-Control-Allow-Origin': '*',
+        'Accept-Ranges': 'bytes',
       };
       if (isExecutableMime) headers['Content-Security-Policy'] = XSS_CSP_HEADER;
 
@@ -1078,11 +1084,12 @@ exports.serveRawFile = async (req, res) => {
   } catch (err) {
     console.error('[DeveloperController] serveRawFile error:', err.message);
     if (res.headersSent) return res.destroy();
-    const unavailable = STORAGE_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(String(err.message || '')));
+    const unavailable = DELIVERY_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(String(err.message || '')));
+    if (unavailable) res.setHeader('Retry-After', '30');
     return res.status(unavailable ? 503 : 404).json({
       success: false,
       error: unavailable
-        ? 'The storage backend is temporarily unavailable. Please retry.'
+        ? 'The storage backend could not serve this file right now. Please retry.'
         : 'The file content could not be retrieved.',
     });
   }
@@ -1125,11 +1132,12 @@ exports.downloadRawFile = async (req, res) => {
   } catch (err) {
     console.error('[DeveloperController] downloadRawFile error:', err.message);
     if (res.headersSent) return res.destroy();
-    const unavailable = STORAGE_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(String(err.message || '')));
+    const unavailable = DELIVERY_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(String(err.message || '')));
+    if (unavailable) res.setHeader('Retry-After', '30');
     return res.status(unavailable ? 503 : 404).json({
       success: false,
       error: unavailable
-        ? 'The storage backend is temporarily unavailable. Please retry.'
+        ? 'The storage backend could not serve this file right now. Please retry.'
         : 'The file content could not be retrieved.',
     });
   }

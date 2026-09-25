@@ -51,6 +51,8 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
   const [creating, setCreating] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createdKeyData, setCreatedKeyData] = useState(null);
+  const [keysError, setKeysError] = useState('');
+  const [createError, setCreateError] = useState('');
 
   // New key form fields
   const [newKeyName, setNewKeyName] = useState('');
@@ -60,6 +62,7 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
   // Key detail inspection state
   const [selectedKeyRecord, setSelectedKeyRecord] = useState(null);
   const [keyFilesData, setKeyFilesData] = useState(null);
+  const [keyFilesError, setKeyFilesError] = useState('');
   const [loadingKeyFiles, setLoadingKeyFiles] = useState(false);
   const [keyFileCategory, setKeyFileCategory] = useState('all');
 
@@ -84,14 +87,18 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
     try {
       setLoading(true);
       const res = await api.getApiKeys();
-      if (res.success) {
-        setApiKeys(res.keys);
+      if (res?.success) {
+        setKeysError('');
+        setApiKeys(Array.isArray(res.keys) ? res.keys : []);
         if (res.keys.length > 0 && !selectedKeyForSnippet) {
           setSelectedKeyForSnippet(res.keys[0].key);
         }
+      } else {
+        setKeysError(res?.error || 'Could not load API keys from the server.');
       }
     } catch (err) {
       console.error('[DeveloperSection] loadKeys error:', err);
+      setKeysError(err?.message || 'Could not load API keys from the server.');
     } finally {
       setLoading(false);
     }
@@ -106,12 +113,18 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
     try {
       setLoadingKeyFiles(true);
       setSelectedKeyRecord(keyItem);
+      setKeyFilesError('');
       const res = await api.getApiKeyFiles(keyItem.id);
-      if (res.success) {
+      if (res?.success) {
         setKeyFilesData(res);
+      } else {
+        setKeyFilesData({ files: [], totalFiles: 0, totalSize: 0 });
+        setKeyFilesError(res?.error || 'Could not load the files for this API key.');
       }
     } catch (err) {
       console.error('[DeveloperSection] loadKeyFiles error:', err);
+      setKeyFilesData({ files: [], totalFiles: 0, totalSize: 0 });
+      setKeyFilesError(err?.message || 'Could not load the files for this API key.');
     } finally {
       setLoadingKeyFiles(false);
     }
@@ -121,13 +134,14 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
     e.preventDefault();
     if (!newKeyName.trim()) return;
     setCreating(true);
+    setCreateError('');
     try {
       const res = await api.createApiKey({
         name: newKeyName.trim(),
         purpose: newKeyPurpose,
         validity: newKeyValidity,
       });
-      if (res.success && res.key) {
+      if (res?.success && res.key) {
         setNewKeyName('');
         setNewKeyPurpose('web');
         setNewKeyValidity('never');
@@ -137,9 +151,11 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
           setSelectedKeyForSnippet(res.key.key);
           setRevealedKeys((prev) => ({ ...prev, [res.key.id]: true }));
         }
+      } else {
+        setCreateError(res?.error || 'The server did not create the API key.');
       }
     } catch (err) {
-      alert(`Failed to create API key: ${err.message}`);
+      setCreateError(err?.message || 'Failed to create API key.');
     } finally {
       setCreating(false);
     }
@@ -569,6 +585,11 @@ curl -X POST \\
               <Loader2 className="w-6 h-6 animate-spin text-rose-500 mx-auto mb-2" />
               Fetching files uploaded via this API key...
             </div>
+          ) : keyFilesError ? (
+            <div className="glass-panel p-8 rounded-2xl border border-rose-200 dark:border-rose-800/60 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+              <span>{keyFilesError}</span>
+            </div>
           ) : filteredFiles.length === 0 ? (
             <div className="glass-panel p-12 text-center rounded-2xl border border-dashed border-gray-300 dark:border-gray-800 space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-500 mx-auto">
@@ -828,6 +849,17 @@ curl -X POST \\
             <Loader2 className="w-5 h-5 animate-spin text-rose-500 mr-2" />
             Loading API keys...
           </div>
+        ) : keysError ? (
+          <div className="glass-panel p-8 rounded-2xl border border-rose-200 dark:border-rose-800/60 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+            <span className="flex-1">{keysError}</span>
+            <button
+              onClick={loadKeys}
+              className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
+            >
+              Retry
+            </button>
+          </div>
         ) : apiKeys.length === 0 ? (
           <div className="glass-panel p-8 rounded-2xl border border-dashed border-gray-300 dark:border-gray-800 text-center space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-500 mx-auto">
@@ -1006,7 +1038,7 @@ curl -X POST \\
                   !useCustomDomain ? 'bg-rose-500 text-white shadow-xs' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
                 }`}
               >
-                Auto-Detect ({defaultBaseUrl.replace(/^https?:\/\//, '')})
+                Auto-Detect ({(defaultBaseUrl || 'same origin').replace(/^https?:\/\//, '')})
               </button>
               <button
                 type="button"
@@ -1200,6 +1232,7 @@ curl -X POST \\
                 onClick={() => {
                   setShowCreateModal(false);
                   setCreatedKeyData(null);
+                  setCreateError('');
                 }}
                 className="p-1.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer"
               >
@@ -1257,6 +1290,7 @@ curl -X POST \\
                     onClick={() => {
                       setShowCreateModal(false);
                       setCreatedKeyData(null);
+                      setCreateError('');
                     }}
                     className="px-5 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
                   >
@@ -1267,6 +1301,13 @@ curl -X POST \\
             ) : (
               /* Form */
               <form onSubmit={handleCreateKey} className="space-y-4">
+                {createError && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2 animate-fade-in">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{createError}</span>
+                  </div>
+                )}
+
                 {/* Field 1: Name */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-gray-700 dark:text-gray-300">Key Name</label>

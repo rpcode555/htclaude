@@ -129,7 +129,13 @@ exports.createFolder = async (req, res) => {
     // construction, but an unknown/trashed parent would orphan the folder).
     let parentId = null;
     if (parent_id !== undefined && parent_id !== null && parent_id !== '' && parent_id !== 'root') {
-      const parent = await db.getFolderById(parent_id);
+      if (typeof parent_id !== 'string') {
+        return res.status(400).json({ success: false, error: 'Parent folder id must be a string.' });
+      }
+      // Read through getFolders() so a folder that only exists in the cloud
+      // (not yet pulled into the local cache) is not reported as missing.
+      const allFolders = (await db.getFolders()) || [];
+      const parent = allFolders.find((f) => f.id === parent_id);
       if (!parent) {
         return res.status(400).json({ success: false, error: 'Parent folder not found.' });
       }

@@ -28,11 +28,21 @@
  *    intended: the plaintext is only ever shown once, at creation time.
  */
 
-const SUPABASE_URL = process.env.SUPABASE_URL || null;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || null;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
-
 const firestoreService = require('./firestoreService');
+
+/**
+ * Resolve the Supabase configuration lazily: db.js pulls this module in before
+ * dotenv has been loaded, so a snapshot taken at require() time was frequently
+ * empty and silently disabled cloud persistence.
+ */
+function getSupabaseConfig() {
+  firestoreService.ensureDotenvLoaded();
+  const url = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+  // Prefer the service role key: this adapter is server side only and RLS would
+  // otherwise silently reject writes.
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+  return { url, key, enabled: !!(url && key) };
+}
 
 const TABLES = {
   files: 'htc_files',
@@ -104,19 +114,27 @@ function buildFilePayload(file) {
 }
 
 class CloudDbService {
-  constructor() {
-    this.supabaseUrl = (SUPABASE_URL || '').replace(/\/+$/, '');
-    // Prefer the service role key: this adapter is server side only and RLS
-    // would otherwise silently reject writes.
-    this.supabaseKey = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
-    this.hasSupabase = !!(this.supabaseUrl && this.supabaseKey);
-    this.hasFirebase = !!firestoreService.isEnabled();
+  get supabaseUrl() {
+    return getSupabaseConfig().url;
+  }
+
+  get supabaseKey() {
+    return getSupabaseConfig().key;
+  }
+
+  get hasSupabase() {
+    return getSupabaseConfig().enabled;
+  }
+
+  get hasFirebase() {
+    return firestoreService.isEnabled();
   }
 
   getSupabaseHeaders(prefer) {
+    const { key } = getSupabaseConfig();
     const headers = {
-      apikey: this.supabaseKey,
-      Authorization: `Bearer ${this.supabaseKey}`,
+      apikey: key,
+      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
     };
     if (prefer) headers.Prefer = prefer;
@@ -128,11 +146,12 @@ class CloudDbService {
    * Returns { ok, status, data } - never throws for HTTP errors.
    */
   async supabaseRequest(path, { method = 'GET', body, prefer, params = '' } = {}) {
-    if (!this.hasSupabase) return { ok: false, status: 0, data: null, error: 'Supabase is not configured' };
+    const { url, key, enabled } = getSupabaseConfig();
+    if (!enabled) return { ok: false, status: 0, data: null, error: 'Supabase is not configured' };
 
-    const url = `${this.supabaseUrl}/rest/v1/${path}${params ? `?${params}` : ''}`;
+    const requestUrl = `${url}/rest/v1/${path}${params ? `?${params}` : ''}`;
     try {
-      const res = await fetch(url, {
+      const res = await fetch(requestUrl, {
         method,
         headers: this.getSupabaseHeaders(prefer),
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -429,10 +448,11 @@ class CloudDbService {
 
     // 1. Try Supabase
     if (this.hasSupabase) {
+      const supabaseUrl = this.supabaseUrl;
       const headers = this.getSupabaseHeaders();
       const fetchCollection = async (path) => {
         try {
-          const res = await fetch(`${this.supabaseUrl}/rest/v1/${path}`, { headers });
+          const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, { headers });
           if (!res.ok) {
             let detail = '';
             try {

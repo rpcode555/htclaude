@@ -1721,7 +1721,7 @@ class TelegramService {
       let purgeMode = scan.complete ? 'authoritative-scan' : 'verified';
       if (candidates.length > 0) {
         if (scan.complete) {
-          purgedIds = db.purgeMissingTelegramFiles(candidates.map((f) => f.id));
+          purgedIds = db.purgeFilesByIds(candidates.map((f) => f.id));
         } else {
           try {
             const candidateIds = new Set();
@@ -1731,7 +1731,7 @@ class TelegramService {
               if (primary !== null) candidateIds.add(primary);
             }
             const missing = await this._findMissingMessageIds('me', Array.from(candidateIds));
-            purgedIds = db.purgeMissingTelegramFiles(
+            purgedIds = db.purgeFilesByIds(
               candidates
                 .filter((file) => {
                   const ids = normalizeMessageIds(file.telegram_chunk_ids);

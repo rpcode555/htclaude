@@ -1,6 +1,11 @@
 const telegramService = require('../services/telegramService');
 const { getSetting, setSetting, getAllSettings } = require('../db');
 
+async function getServerSession() {
+  const stored = await getSetting('session_string');
+  return typeof stored === 'string' ? stored.trim() : '';
+}
+
 exports.getStatus = async (req, res) => {
   try {
     const isManualHeader =
@@ -33,33 +38,19 @@ exports.getStatus = async (req, res) => {
       });
     }
 
-    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
-
-    // Only auto-reconnect if client instance is not yet created AND client session is available AND not manually disconnected
-    if (!telegramService.client && clientSession && !isManualDisconnected) {
-      try {
-        const apiId = await getSetting('api_id');
-        const apiHash = await getSetting('api_hash');
-
-        if (apiId && apiHash) {
-          await telegramService.connectSessionString(apiId, apiHash, clientSession);
-        }
-      } catch (e) {
-        console.warn('[Auth] Auto-reconnect with client session notice:', e.message);
-      }
-    }
-
-    const status = await telegramService.getStatus(isManualDisconnected ? '' : clientSession);
+    // Never take a Telegram session from a header or query string. Only the
+    // server-owned active session may be used to inspect connection status.
+    const activeSession = isManualDisconnected ? '' : await getServerSession();
+    const status = await telegramService.getStatus(activeSession);
     const settings = await getAllSettings();
-    const activeSession = isManualDisconnected ? '' : ((await getSetting('session_string')) || clientSession || '');
 
     // Redact sensitive keys
     const safeSettings = {
       auth_type: status.authType,
       api_id: settings.api_id ? '******' + String(settings.api_id).slice(-3) : '',
       phone_number: settings.phone_number ? '******' + String(settings.phone_number).slice(-4) : '',
-      has_session: !!(status.sessionString || settings.session_string || clientSession),
+      has_session: !!(status.sessionString || activeSession),
       chat_id: 'me',
       auto_backup: settings.auto_backup || '1',
     };
@@ -67,6 +58,8 @@ exports.getStatus = async (req, res) => {
     res.json({
       success: true,
       ...status,
+      // Keep the response shape for the client, but never substitute a
+      // client-supplied session value for the server-owned session.
       sessionString: status.connected ? (status.sessionString || activeSession) : '',
       settings: safeSettings,
     });
@@ -197,8 +190,7 @@ exports.checkQrCode = async (req, res) => {
 
 exports.syncTelegram = async (req, res) => {
   try {
-    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    const sessionString = clientSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
+    const sessionString = await getServerSession(req);
     if (!sessionString) {
       return res.status(400).json({
         success: false,
@@ -216,8 +208,14 @@ exports.syncTelegram = async (req, res) => {
 
 exports.backupDatabase = async (req, res) => {
   try {
-    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    const sessionString = clientSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
+    const sessionString = await getServerSession(req);
+    if (!sessionString) {
+      return res.status(400).json({
+        success: false,
+        error: 'Telegram account is not connected. Please connect your Telegram account first.',
+      });
+    }
+
     const result = await telegramService.backupDatabaseToSavedMessages(sessionString);
     if (!result.success) {
       return res.status(400).json(result);
@@ -261,9 +259,9 @@ exports.getMe = async (req, res) => {
     res.json({
       success: true,
       user: {
-        uid: req.user?.uid || req.user?.localId,
-        email: req.user?.email,
-        isAdmin: true,
+        uid: req.user?.uid || req.user?.localId || null,
+        email: req.user?.email || null,
+        isAdmin: !!req.user,
       },
     });
   } catch (err) {
