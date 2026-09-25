@@ -28,7 +28,10 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../api';
-import { formatBytes, formatDate } from '../utils';
+import { formatBytes, formatDate, isTrashed } from '../utils';
+
+// Hard stop for corrupted parent chains (defensive: cycles must never hang the UI)
+const MAX_BREADCRUMB_DEPTH = 25;
 
 // ── Category styling map ──────────────────────────────────────────────
 const CATEGORY_STYLE = {
@@ -92,23 +95,30 @@ export default function FileExplorer({
 
   const currentFolder   = safeFolders.find(f => f.id === currentFolderId);
   const activeSubfolders = safeFolders.filter(f => {
-    if (f.is_trash) return false;
+    if (isTrashed(f)) return false;
     return currentFolderId ? f.parent_id === currentFolderId : !f.parent_id;
   });
-  const trashedFolders = safeFolders.filter(f => f.is_trash === 1);
+  const trashedFolders = safeFolders.filter(f => isTrashed(f));
 
-  // Breadcrumbs
+  // Breadcrumbs — cycle safe: a corrupted parent chain (folder A inside B inside
+  // A) is walked iteratively with a visited set instead of recursing forever.
   const getBreadcrumbs = () => {
     const crumbs = [{ id: null, name: 'My Cloud' }];
     if (!currentFolderId) return crumbs;
-    const findPath = (targetId) => {
-      const f = safeFolders.find(item => item.id === targetId);
-      if (!f) return;
-      if (f.parent_id) findPath(f.parent_id);
-      crumbs.push({ id: f.id, name: f.name });
-    };
-    findPath(currentFolderId);
-    return crumbs;
+
+    const seen = new Set();
+    const chain = [];
+    let cursorId = currentFolderId;
+
+    while (cursorId && !seen.has(cursorId) && chain.length < MAX_BREADCRUMB_DEPTH) {
+      seen.add(cursorId);
+      const folder = safeFolders.find(item => item.id === cursorId);
+      if (!folder) break;
+      chain.unshift({ id: folder.id, name: folder.name });
+      cursorId = folder.parent_id || null;
+    }
+
+    return [...crumbs, ...chain];
   };
   const breadcrumbs = getBreadcrumbs();
 

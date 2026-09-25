@@ -25,6 +25,15 @@ export default function UploadModal({
     Array.isArray(uploadQueue) &&
     uploadQueue.some((item) => item.status === 'error');
 
+  // Per-status counters so a partially failed batch is described precisely
+  const totalCount = Array.isArray(uploadQueue) ? uploadQueue.length : 0;
+  const doneCount = Array.isArray(uploadQueue)
+    ? uploadQueue.filter((item) => item.status === 'done').length
+    : 0;
+  const errorCount = Array.isArray(uploadQueue)
+    ? uploadQueue.filter((item) => item.status === 'error').length
+    : 0;
+
   // Trigger dismissal with smooth exit transition
   const handleClose = () => {
     if (isClosing) return;
@@ -92,10 +101,10 @@ export default function UploadModal({
           )}
           <span className="text-xs font-bold text-gray-800 dark:text-gray-100">
             {isUploading
-              ? `Uploading ${uploadQueue.length} file(s)...`
+              ? `Uploading ${doneCount + errorCount} of ${totalCount} file(s)...`
               : hasErrors
-              ? `Upload finished with errors`
-              : `Uploaded ${uploadQueue.length} file(s)`}
+              ? `Upload finished — ${doneCount}/${totalCount} uploaded, ${errorCount} failed`
+              : `Uploaded ${doneCount} of ${totalCount} file(s)`}
           </span>
         </div>
 
@@ -204,10 +213,29 @@ export default function UploadModal({
                   </div>
                 </div>
               )}
+
+              {/* Failure reason stays visible until the panel is dismissed */}
+              {item.status === 'error' && (
+                <p
+                  className="text-[11px] text-rose-600 dark:text-rose-400 font-medium break-words"
+                  title={item.error || 'Upload failed'}
+                >
+                  {item.error || item.stageText || 'Upload failed.'}
+                </p>
+              )}
             </div>
           );
         })}
       </div>
+
+      {hasErrors && (
+        <div className="px-3 pb-3 -mt-1 text-[10px] text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1.5">
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          <span>
+            {errorCount} file(s) failed. Dismiss this panel to retry them individually.
+          </span>
+        </div>
+      )}
 
       <style>{`
         @keyframes uploadCountdown {

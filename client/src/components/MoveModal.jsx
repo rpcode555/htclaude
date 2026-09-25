@@ -1,15 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, FolderInput, Folder, Home } from 'lucide-react';
+import { isTrashed } from '../utils';
 
 export default function MoveModal({ isOpen, onClose, folders, onMove, selectedCount }) {
   const [targetFolderId, setTargetFolderId] = useState('root');
+  const [isMoving, setIsMoving] = useState(false);
+
+  // Trashed folders must never be offered as a destination
+  const availableFolders = useMemo(
+    () => (Array.isArray(folders) ? folders : []).filter((f) => f && !isTrashed(f)),
+    [folders]
+  );
+
+  // Always start from a valid destination every time the modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setTargetFolderId('root');
+      setIsMoving(false);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  // Guard against a destination that disappeared while the modal was open
+  const isValidTarget =
+    targetFolderId === 'root' || availableFolders.some((f) => f.id === targetFolderId);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onMove(targetFolderId);
-    onClose();
+    if (isMoving || !isValidTarget) return;
+    setIsMoving(true);
+    try {
+      // Stay open when the move fails so the user can pick another destination
+      const result = await onMove(targetFolderId);
+      if (result !== false) onClose();
+    } finally {
+      setIsMoving(false);
+    }
   };
 
   return (
@@ -50,7 +77,7 @@ export default function MoveModal({ isOpen, onClose, folders, onMove, selectedCo
                 <span>My Cloud (Root)</span>
               </button>
 
-              {(folders || []).map((f) => (
+              {availableFolders.map((f) => (
                 <button
                   key={f.id}
                   type="button"
@@ -65,6 +92,12 @@ export default function MoveModal({ isOpen, onClose, folders, onMove, selectedCo
                   <span className="truncate">{f.name}</span>
                 </button>
               ))}
+
+              {availableFolders.length === 0 && (
+                <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-gray-500 italic">
+                  No folders available — items will be moved to My Cloud (Root).
+                </p>
+              )}
             </div>
           </div>
 
@@ -72,15 +105,17 @@ export default function MoveModal({ isOpen, onClose, folders, onMove, selectedCo
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
+              disabled={isMoving}
+              className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+              disabled={isMoving || !isValidTarget}
+              className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
             >
-              Move Here
+              {isMoving ? 'Moving...' : 'Move Here'}
             </button>
           </div>
         </form>
