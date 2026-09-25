@@ -17,7 +17,7 @@ import { api } from '../api';
 import { useConfirm } from '../context/ConfirmContext';
 import { useTheme } from '../context/ThemeContext';
 
-export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) {
+export default function SettingsModal({ authStatus, onClose, onRefreshStatus, onDisconnect }) {
   const confirm = useConfirm();
   const { isDark, toggleTheme } = useTheme();
   const [activeTab, setActiveTab] = useState('saved_messages');
@@ -85,6 +85,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         if (res.status === 'success' || res.success) {
           stopQrPolling();
           setQrAuthenticating(true);
+          localStorage.removeItem('htc_manual_disconnect');
           if (res.sessionString) {
             localStorage.setItem('htc_tg_session', res.sessionString);
           }
@@ -167,7 +168,8 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
   };
 
   useEffect(() => {
-    const hasLocalSession = !!localStorage.getItem('htc_tg_session');
+    const isLocallyDisconnected = localStorage.getItem('htc_manual_disconnect') === 'true';
+    const hasLocalSession = !isLocallyDisconnected && !!localStorage.getItem('htc_tg_session');
     if (hasLocalSession && !authStatus?.connected) {
       onRefreshStatus?.();
       return;
@@ -245,6 +247,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         setRequires2FA(true);
         setErrorMsg('Please enter your Two-Step Verification (2FA) password.');
       } else if (res.success || res.status === 'success') {
+        localStorage.removeItem('htc_manual_disconnect');
         if (res.sessionString) {
           localStorage.setItem('htc_tg_session', res.sessionString);
         }
@@ -273,6 +276,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     try {
       const res = await api.connectSessionString(sessionStringInput.trim(), apiId.trim() || null, apiHash.trim() || null);
       if (res.success) {
+        localStorage.removeItem('htc_manual_disconnect');
         const sess = res.sessionString || sessionStringInput.trim();
         if (sess) {
           localStorage.setItem('htc_tg_session', sess);
@@ -344,30 +348,44 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
     if (ok) {
       setLoading(true);
       try {
+        localStorage.setItem('htc_manual_disconnect', 'true');
         localStorage.removeItem('htc_tg_session');
+        localStorage.removeItem('htc_tg_user');
+
+        if (typeof onDisconnect === 'function') {
+          onDisconnect();
+        }
+
         await api.disconnect();
         await onRefreshStatus();
+
         setSuccessMsg('Disconnected from Telegram. Now using Sandbox Mode.');
         setCodeSent(false);
         setPhoneCodeHash('');
         setTempSession('');
+        setOtpCode('');
+        setSessionStringInput('');
+        setLoginMethod('phone');
       } catch (err) {
-        setErrorMsg(err.message);
+        setErrorMsg(err.message || 'Failed to disconnect.');
       } finally {
         setLoading(false);
       }
     }
   };
 
-  const hasLocalSession = !!localStorage.getItem('htc_tg_session');
-  const isUserConnected = !authStatus?.manualDisconnect && (authStatus?.connected || hasLocalSession);
+  const isLocallyDisconnected = localStorage.getItem('htc_manual_disconnect') === 'true';
+  const hasLocalSession = !isLocallyDisconnected && !!localStorage.getItem('htc_tg_session');
+  const isUserConnected = !isLocallyDisconnected && !authStatus?.manualDisconnect && (authStatus?.connected || hasLocalSession);
 
   let cachedUser = null;
-  try {
-    const raw = localStorage.getItem('htc_tg_user');
-    if (raw) cachedUser = JSON.parse(raw);
-  } catch (e) {}
-  const displayUser = authStatus?.user || cachedUser;
+  if (!isLocallyDisconnected) {
+    try {
+      const raw = localStorage.getItem('htc_tg_user');
+      if (raw) cachedUser = JSON.parse(raw);
+    } catch (e) {}
+  }
+  const displayUser = isLocallyDisconnected ? null : (authStatus?.user || cachedUser);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 md:p-6 animate-fade-in select-none">

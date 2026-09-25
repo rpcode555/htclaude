@@ -56,6 +56,17 @@ function MainApp() {
   const [stats, setStats] = useState(null);
   const [authStatus, setAuthStatus] = useState(() => {
     try {
+      const isManual = localStorage.getItem('htc_manual_disconnect') === 'true';
+      if (isManual) {
+        return {
+          connected: false,
+          manualDisconnect: true,
+          authType: 'demo',
+          configuredType: 'saved_messages',
+          sessionString: '',
+          user: null,
+        };
+      }
       const savedSession = localStorage.getItem('htc_tg_session');
       if (savedSession && savedSession.length > 20) {
         let user = { firstName: 'Telegram User', target: 'Saved Messages (me)' };
@@ -124,6 +135,25 @@ function MainApp() {
   const loadData = async () => {
     if (!isAuthorized) return;
     try {
+      const isManual = localStorage.getItem('htc_manual_disconnect') === 'true';
+      if (isManual) {
+        setAuthStatus({
+          connected: false,
+          manualDisconnect: true,
+          authType: 'demo',
+          configuredType: 'saved_messages',
+          sessionString: '',
+          user: null,
+        });
+        const [foldersRes, statsRes] = await Promise.all([
+          api.getFolders(),
+          api.getStats(),
+        ]);
+        if (foldersRes.success) setFolders(foldersRes.folders);
+        if (statsRes.success) setStats(statsRes.stats);
+        return;
+      }
+
       const [statusRes, foldersRes, statsRes] = await Promise.all([
         api.getStatus(),
         api.getFolders(),
@@ -152,7 +182,8 @@ function MainApp() {
     if (!isAuthorized || currentView === 'admin' || currentView === 'developer') return;
     if (!silent) setLoadingFiles(true);
     try {
-      const hasTelegramSession = !!localStorage.getItem('htc_tg_session') || !!authStatus?.connected;
+      const isManual = localStorage.getItem('htc_manual_disconnect') === 'true';
+      const hasTelegramSession = !isManual && (!!localStorage.getItem('htc_tg_session') || !!authStatus?.connected);
       if (!hasTelegramSession) {
         setFiles([]);
         return;
@@ -261,8 +292,10 @@ function MainApp() {
     setTimeout(() => setToast({ message: '', visible: false }), duration);
   };
 
+  const isLocallyDisconnected = localStorage.getItem('htc_manual_disconnect') === 'true';
+  const isConnected = !isLocallyDisconnected && (!!authStatus?.connected || !!localStorage.getItem('htc_tg_session'));
+
   const triggerUpload = () => {
-    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
     if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
@@ -272,7 +305,6 @@ function MainApp() {
   };
 
   const handleNewFileClick = () => {
-    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
     if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before creating files.');
       setIsSettingsOpen(true);
@@ -285,7 +317,6 @@ function MainApp() {
   const handleUploadFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
 
-    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
     if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
@@ -411,7 +442,6 @@ function MainApp() {
     dragCounter.current = 0;
     setIsDragOver(false);
 
-    const isConnected = !!authStatus?.connected || !!localStorage.getItem('htc_tg_session');
     if (!isConnected) {
       showToast('⚠️ First connect Telegram! Please connect your Telegram account before uploading files.');
       setIsSettingsOpen(true);
@@ -811,6 +841,18 @@ function MainApp() {
           onClose={() => setIsSettingsOpen(false)}
           onRefreshStatus={async () => {
             await Promise.all([loadData(), loadFiles()]);
+          }}
+          onDisconnect={() => {
+            setAuthStatus({
+              connected: false,
+              manualDisconnect: true,
+              authType: 'demo',
+              configuredType: 'saved_messages',
+              sessionString: '',
+              user: null,
+            });
+            setFiles([]);
+            showToast('👋 Disconnected from Telegram account.');
           }}
         />
       )}

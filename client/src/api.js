@@ -11,7 +11,8 @@ async function getAuthHeader() {
     const token = await user.getIdToken();
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const tgSession = localStorage.getItem('htc_tg_session');
+  const isManual = localStorage.getItem('htc_manual_disconnect') === 'true';
+  const tgSession = isManual ? '' : localStorage.getItem('htc_tg_session');
   if (tgSession) {
     headers['X-Telegram-Session'] = tgSession;
   }
@@ -91,6 +92,19 @@ export const api = {
 
   // --- Auth & Telegram Connection ---
   async getStatus() {
+    const isManualDisconnected = localStorage.getItem('htc_manual_disconnect') === 'true';
+    if (isManualDisconnected) {
+      return {
+        success: true,
+        connected: false,
+        authType: 'demo',
+        configuredType: 'saved_messages',
+        sessionString: '',
+        user: null,
+        hasCredentials: { hasApiId: false, hasSession: false },
+        manualDisconnect: true,
+      };
+    }
     const headers = await getAuthHeader();
     const tgSession = localStorage.getItem('htc_tg_session');
     const url = tgSession ? `${API_BASE}/auth/status?session=${encodeURIComponent(tgSession)}` : `${API_BASE}/auth/status`;
@@ -106,6 +120,7 @@ export const api = {
         } catch (e) {}
       }
     } else if (data?.manualDisconnect) {
+      localStorage.setItem('htc_manual_disconnect', 'true');
       localStorage.removeItem('htc_tg_session');
       localStorage.removeItem('htc_tg_user');
     }
@@ -140,6 +155,7 @@ export const api = {
     });
     const data = await safeJson(res);
     if ((data.success || data.status === 'success') && data.sessionString) {
+      localStorage.removeItem('htc_manual_disconnect');
       localStorage.setItem('htc_tg_session', data.sessionString);
       if (data.user) {
         try {
@@ -169,6 +185,7 @@ export const api = {
     });
     const data = await safeJson(res);
     if ((data.success || data.status === 'success') && data.sessionString) {
+      localStorage.removeItem('htc_manual_disconnect');
       localStorage.setItem('htc_tg_session', data.sessionString);
       if (data.user) {
         try {
@@ -202,7 +219,10 @@ export const api = {
     const data = await safeJson(res);
     if (data.success) {
       const sess = data.sessionString || (typeof sessionString === 'string' ? sessionString : body.sessionString);
-      if (sess) localStorage.setItem('htc_tg_session', sess);
+      if (sess) {
+        localStorage.removeItem('htc_manual_disconnect');
+        localStorage.setItem('htc_tg_session', sess);
+      }
       if (data.user) {
         try {
           localStorage.setItem('htc_tg_user', JSON.stringify(data.user));
@@ -235,10 +255,12 @@ export const api = {
   },
 
   async disconnect() {
-    const headers = await getAuthHeader();
+    localStorage.setItem('htc_manual_disconnect', 'true');
     localStorage.removeItem('htc_tg_session');
     localStorage.removeItem('htc_tg_user');
-    const res = await fetch(`${API_BASE}/auth/disconnect`, {
+    const headers = await getAuthHeader();
+    headers['X-Telegram-Manual-Disconnect'] = 'true';
+    const res = await fetch(`${API_BASE}/auth/disconnect?disconnected=true`, {
       method: 'POST',
       headers,
     });

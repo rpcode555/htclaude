@@ -109,15 +109,22 @@ class Database {
           this.data.folders = Array.from(folderMap.values());
         }
         if (cloudData.settings && Object.keys(cloudData.settings).length > 0) {
-          const isManualDisconnected = this.data.settings?.manual_disconnect === true;
+          const isManualDisconnected =
+            this.data.settings?.manual_disconnect === true || cloudData.settings?.manual_disconnect === true;
           if (isManualDisconnected) {
             const { session_string, ...safeSettings } = cloudData.settings;
-            this.data.settings = { ...this.data.settings, ...safeSettings, session_string: '', manual_disconnect: true };
+            this.data.settings = {
+              ...this.data.settings,
+              ...safeSettings,
+              session_string: '',
+              manual_disconnect: true,
+              auth_type: 'demo',
+            };
           } else {
-            // Keep local valid session_string if cloudData has empty session_string
+            // Keep valid session_string if cloudData has non-empty session_string or local has one
             const localSession = this.data.settings?.session_string || process.env.TELEGRAM_SESSION_STRING || '';
             const cloudSession = cloudData.settings?.session_string || '';
-            const sessionToKeep = localSession || cloudSession;
+            const sessionToKeep = cloudSession || localSession;
 
             this.data.settings = {
               ...this.data.settings,

@@ -3,6 +3,36 @@ const { getSetting, setSetting, getAllSettings } = require('../db');
 
 exports.getStatus = async (req, res) => {
   try {
+    const isManualHeader =
+      req.headers['x-telegram-manual-disconnect'] === 'true' ||
+      req.query?.disconnected === 'true';
+
+    if (isManualHeader) {
+      await telegramService.disconnect();
+      return res.json({
+        success: true,
+        connected: false,
+        authType: 'demo',
+        configuredType: 'saved_messages',
+        sessionString: '',
+        user: {
+          firstName: 'Disconnected',
+          username: '',
+          target: 'Saved Messages (Offline / Sandbox)',
+        },
+        hasCredentials: { hasApiId: false, hasSession: false },
+        manualDisconnect: true,
+        settings: {
+          auth_type: 'demo',
+          api_id: '',
+          phone_number: '',
+          has_session: false,
+          chat_id: 'me',
+          auto_backup: '1',
+        },
+      });
+    }
+
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
 
@@ -20,9 +50,9 @@ exports.getStatus = async (req, res) => {
       }
     }
 
-    const status = await telegramService.getStatus(clientSession);
+    const status = await telegramService.getStatus(isManualDisconnected ? '' : clientSession);
     const settings = await getAllSettings();
-    const activeSession = (await getSetting('session_string')) || clientSession || '';
+    const activeSession = isManualDisconnected ? '' : ((await getSetting('session_string')) || clientSession || '');
 
     // Redact sensitive keys
     const safeSettings = {
@@ -37,7 +67,7 @@ exports.getStatus = async (req, res) => {
     res.json({
       success: true,
       ...status,
-      sessionString: status.connected ? (status.sessionString || activeSession) : activeSession,
+      sessionString: status.connected ? (status.sessionString || activeSession) : '',
       settings: safeSettings,
     });
   } catch (err) {
@@ -201,7 +231,13 @@ exports.backupDatabase = async (req, res) => {
 exports.disconnect = async (req, res) => {
   try {
     const result = await telegramService.disconnect();
-    res.json(result);
+    res.json({
+      success: true,
+      connected: false,
+      manualDisconnect: true,
+      sessionString: '',
+      ...result,
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

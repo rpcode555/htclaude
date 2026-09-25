@@ -48,14 +48,26 @@ router.use((req, res, next) => {
 // Auto-sync Telegram session token from client requests (essential for stateless/serverless runtimes)
 router.use(async (req, res, next) => {
   try {
+    const isManualDisconnectRequest =
+      req.headers['x-telegram-manual-disconnect'] === 'true' ||
+      req.query?.disconnected === 'true' ||
+      req.path === '/auth/disconnect';
+
+    if (isManualDisconnectRequest) {
+      return next();
+    }
+
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
     if (clientSession && clientSession.length > 20) {
       const { getSetting, setSetting } = require('../db');
-      const currentSession = await getSetting('session_string');
-      if (!currentSession || currentSession !== clientSession) {
-        await setSetting('session_string', clientSession);
-        await setSetting('manual_disconnect', false);
-        await setSetting('auth_type', 'saved_messages');
+      const isManual = (await getSetting('manual_disconnect')) === true;
+      if (!isManual) {
+        const currentSession = await getSetting('session_string');
+        if (!currentSession || currentSession !== clientSession) {
+          await setSetting('session_string', clientSession);
+          await setSetting('manual_disconnect', false);
+          await setSetting('auth_type', 'saved_messages');
+        }
       }
     }
   } catch (e) {
