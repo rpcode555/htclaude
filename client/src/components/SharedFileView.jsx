@@ -19,6 +19,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { api } from '../api';
+import { apiUrl } from '../apiConfig';
 import { useTheme } from '../context/ThemeContext';
 import { formatBytes, formatDate } from '../utils';
 
@@ -37,6 +38,7 @@ export default function SharedFileView({ fileId: propFileId }) {
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const [textContent, setTextContent] = useState('');
+  const [textError, setTextError] = useState('');
   const [loadingText, setLoadingText] = useState(false);
   const [htmlViewMode, setHtmlViewMode] = useState('preview'); // 'preview' | 'code'
 
@@ -65,16 +67,24 @@ export default function SharedFileView({ fileId: propFileId }) {
 
           if (isTextLike) {
             setLoadingText(true);
-            fetch(`/api/files/${res.file.id}/stream`)
-              .then((r) => r.text())
+            setTextError('');
+            // Public share view: no token/session is attached to the URL
+            fetch(apiUrl(`/files/${res.file.id}/stream`), { cache: 'no-store' })
+              .then((r) => {
+                if (!r.ok) throw new Error(`Server responded ${r.status}`);
+                return r.text();
+              })
               .then((txt) => {
                 if (isMounted) {
                   setTextContent(txt);
                   setLoadingText(false);
                 }
               })
-              .catch(() => {
-                if (isMounted) setLoadingText(false);
+              .catch((err) => {
+                if (isMounted) {
+                  setTextError(err?.message || 'Could not load the file content.');
+                  setLoadingText(false);
+                }
               });
           }
         } else {
@@ -138,7 +148,7 @@ export default function SharedFileView({ fileId: propFileId }) {
     );
   }
 
-  const streamUrl = `/api/files/${file.id}/stream`;
+  const streamUrl = apiUrl(`/files/${file.id}/stream`);
   const isImage = file.category === 'images' || file.mime_type?.startsWith('image/');
   const isVideo = file.category === 'videos' || file.mime_type?.startsWith('video/');
   const isAudio = file.category === 'audio' || file.mime_type?.startsWith('audio/');
@@ -308,7 +318,8 @@ export default function SharedFileView({ fileId: propFileId }) {
                 </span>
                 <button
                   onClick={handleCopyContent}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors cursor-pointer text-xs"
+                  disabled={!textContent}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors cursor-pointer text-xs disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copied ? 'Copied' : 'Copy Content'}</span>
@@ -317,6 +328,11 @@ export default function SharedFileView({ fileId: propFileId }) {
               <div className="flex-1 overflow-auto p-4 sm:p-6 font-mono text-xs sm:text-sm leading-relaxed">
                 {loadingText ? (
                   <div className="p-8 text-center text-gray-500">Loading document text...</div>
+                ) : textError ? (
+                  <div className="p-8 text-center text-rose-400 flex items-center justify-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{textError}</span>
+                  </div>
                 ) : (
                   <pre className="whitespace-pre-wrap break-words">{textContent || 'Empty file'}</pre>
                 )}

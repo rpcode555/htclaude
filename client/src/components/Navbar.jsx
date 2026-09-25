@@ -324,7 +324,7 @@ export default function Navbar({
               </button>
             ) : (
               <button
-                onClick={onOpenAuthModal}
+                onClick={() => onOpenAuthModal?.()}
                 className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 text-xs font-semibold border border-rose-200 dark:border-rose-800/60 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-all cursor-pointer shrink-0"
               >
                 Sign In

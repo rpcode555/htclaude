@@ -104,8 +104,11 @@ export default function FilePreviewModal({ file, onClose, onDownload, onTrash, o
   useEffect(() => {
     if (file && isTextLike && streamUrl) {
       setLoadingText(true);
-      fetch(streamUrl)
-        .then((r) => r.text())
+      fetch(streamUrl, { cache: 'no-store' })
+        .then((r) => {
+          if (!r.ok) throw new Error(`Server responded ${r.status}`);
+          return r.text();
+        })
         .then((txt) => {
           setTextContent(txt);
           setLoadingText(false);

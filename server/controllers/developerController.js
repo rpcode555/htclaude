@@ -1080,7 +1080,7 @@ exports.serveRawFile = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Image / file not found.' });
     }
 
-    sendFilePayload(req, res, file, streamData, { download: false });
+    sendFilePayload(req, res, file, streamData, { download: false, isPublicAsset: isPublicAsset || isShared });
   } catch (err) {
     console.error('[DeveloperController] serveRawFile error:', err.message);
     if (res.headersSent) return res.destroy();
@@ -1128,7 +1128,7 @@ exports.downloadRawFile = async (req, res) => {
       return res.status(404).json({ success: false, error: 'File not found.' });
     }
 
-    sendFilePayload(req, res, file, streamData, { download: true });
+    sendFilePayload(req, res, file, streamData, { download: true, isPublicAsset: isPublicAsset || isShared });
   } catch (err) {
     console.error('[DeveloperController] downloadRawFile error:', err.message);
     if (res.headersSent) return res.destroy();

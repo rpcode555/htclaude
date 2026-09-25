@@ -490,12 +490,13 @@ class FirestoreService {
 
       if (fieldPaths.length === 0) return true; // nothing to write
 
+      // NOTE: no allow404 here - a 404 must surface as a typed error so the
+      // create-on-missing path below can run.
       await this.request(`${documentPath}?updateMask.fieldPaths=${encodeURIComponent(fieldPaths.join(','))}`, {
         method: 'PATCH',
         body: firestoreBody,
         authToken,
         config,
-        allow404: true,
       });
       return true;
     } catch (err) {

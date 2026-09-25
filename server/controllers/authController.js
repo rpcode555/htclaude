@@ -190,7 +190,7 @@ exports.checkQrCode = async (req, res) => {
 
 exports.syncTelegram = async (req, res) => {
   try {
-    const sessionString = await getServerSession(req);
+    const sessionString = await getServerSession();
     if (!sessionString) {
       return res.status(400).json({
         success: false,
@@ -208,7 +208,7 @@ exports.syncTelegram = async (req, res) => {
 
 exports.backupDatabase = async (req, res) => {
   try {
-    const sessionString = await getServerSession(req);
+    const sessionString = await getServerSession();
     if (!sessionString) {
       return res.status(400).json({
         success: false,

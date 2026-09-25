@@ -6,7 +6,7 @@ const { db, detectCategory, getSetting, normalizeTags, normalizeMessageId, norma
 const telegramService = require('../services/telegramService');
 const uploadTracker = require('../services/uploadTracker');
 
-const { UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR } = require('../config/paths');
+const { isSafePath } = require('../config/paths');
 const { verifyAdminToken } = require('../middleware/authMiddleware');
 
 const ALLOWED_FILE_FILTERS = new Set(['all', 'trash', 'starred', 'recent']);
@@ -19,46 +19,16 @@ function sanitizeFileName(name) {
 }
 
 // --- Local filesystem safety -----------------------------------------------
-// isSafePath() from config/paths is a naive prefix check ("/uploads_evil" also
-// passes), so every local file access in this controller goes through a strict
-// containment test that additionally rejects symlink escapes.
-
-const LOCAL_ROOTS = [UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR, os.tmpdir()]
-  .filter(Boolean)
-  .map((root) => {
-    const resolved = path.resolve(root);
-    try {
-      return fs.realpathSync(resolved);
-    } catch (e) {
-      return resolved;
-    }
-  });
-const LOCAL_ROOTS_RESOLVED = [UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR, os.tmpdir()]
-  .filter(Boolean)
-  .map((root) => path.resolve(root));
-
-function isContainedInRoot(root, target) {
-  if (target === root) return true;
-  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
-  return target.startsWith(prefix);
-}
+// isSafePath() (config/paths) is boundary aware and already excludes the data /
+// secrets directory. On top of it we resolve symlinks, so a link inside a
+// storage directory cannot be used to read or unlink anything else.
 
 function isSafeLocalPath(candidate) {
-  if (!candidate || typeof candidate !== 'string' || candidate.includes('\0')) return false;
-
-  let resolved;
+  if (!isSafePath(candidate)) return false;
   try {
-    resolved = path.resolve(candidate);
+    return isSafePath(fs.realpathSync(candidate));
   } catch (e) {
-    return false;
-  }
-  if (!LOCAL_ROOTS_RESOLVED.some((root) => isContainedInRoot(root, resolved))) return false;
-
-  try {
-    const real = fs.realpathSync(resolved);
-    return LOCAL_ROOTS.some((root) => isContainedInRoot(root, real));
-  } catch (e) {
-    // Target does not exist yet: the resolved-path check above is enough.
+    // Target does not exist yet: the boundary-aware check above is enough.
     return true;
   }
 }

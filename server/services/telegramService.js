@@ -9,7 +9,7 @@ const { CustomFile } = require('telegram/client/uploads');
 const { NewMessage } = require('telegram/events');
 const QRCode = require('qrcode');
 
-const { UPLOADS_DIR, CACHE_DIR, DATA_DIR } = require('../config/paths');
+const { UPLOADS_DIR, CACHE_DIR, DATA_DIR, isSafePath } = require('../config/paths');
 
 try {
   if (!fs.existsSync(UPLOADS_DIR)) {
@@ -21,38 +21,14 @@ try {
 } catch (e) {}
 
 // --- Local path safety ------------------------------------------------------
-// Every generated local path is built from sanitized components and verified to
-// stay inside the managed directories, so a hostile file name can never escape.
-
-const LOCAL_ROOTS_RESOLVED = [UPLOADS_DIR, CACHE_DIR, DATA_DIR, os.tmpdir()]
-  .filter(Boolean)
-  .map((root) => path.resolve(root));
-const LOCAL_ROOTS_REAL = LOCAL_ROOTS_RESOLVED.map((root) => {
-  try {
-    return fs.realpathSync(root);
-  } catch (e) {
-    return root;
-  }
-});
-
-function isContainedInRoot(root, target) {
-  if (target === root) return true;
-  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
-  return target.startsWith(prefix);
-}
+// Every generated local path is built from sanitized components and verified with
+// isSafePath() (boundary aware, data/secrets directory excluded) plus a symlink
+// resolution pass, so a hostile file name can never escape.
 
 function isSafeLocalPath(candidate) {
-  if (!candidate || typeof candidate !== 'string' || candidate.includes('\0')) return false;
-  let resolved;
+  if (!isSafePath(candidate)) return false;
   try {
-    resolved = path.resolve(candidate);
-  } catch (e) {
-    return false;
-  }
-  if (!LOCAL_ROOTS_RESOLVED.some((root) => isContainedInRoot(root, resolved))) return false;
-  try {
-    const real = fs.realpathSync(resolved);
-    return LOCAL_ROOTS_REAL.some((root) => isContainedInRoot(root, real));
+    return isSafePath(fs.realpathSync(candidate));
   } catch (e) {
     return true; // not created yet
   }
@@ -70,7 +46,7 @@ function safePathPart(value, fallback = 'file', maxLength = 120) {
 function buildSafeLocalPath(rootDir, ...parts) {
   const base = path.resolve(rootDir);
   const target = path.resolve(base, ...parts.map((part, index) => safePathPart(part, index === 0 ? 'file' : `part${index}`)));
-  if (!isContainedInRoot(base, target) || !isSafeLocalPath(target)) {
+  if (!isSafePath(target) || !isSafeLocalPath(target)) {
     return null;
   }
   return target;

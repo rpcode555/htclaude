@@ -59,7 +59,11 @@ export default function AdminPanel({
         setTestResult(`✅ Test file uploaded to Saved Messages! Message ID: #${data.files?.[0]?.telegram_msg_id || 'N/A'}`);
         await onRefreshData();
       } else {
-        setTestResult(`❌ Test upload failed: ${data.error || 'Unknown error'}`);
+        const reason =
+          data.error ||
+          data.errors?.map((e) => `${e.name}: ${e.message}`).join('; ') ||
+          'Unknown error';
+        setTestResult(`❌ Test upload failed: ${reason}`);
       }
     } catch (err) {
       setTestResult(`❌ Connection error: ${err.message}`);
@@ -156,12 +160,12 @@ export default function AdminPanel({
           <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 font-mono">
             <div className="px-3 py-1.5 rounded-xl bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800">
               <span className="text-gray-400">UID: </span>
-              <span className="text-gray-800 dark:text-gray-200">{currentUser.uid.slice(0, 12)}...</span>
+              <span className="text-gray-800 dark:text-gray-200">{(currentUser.uid || 'unknown').slice(0, 12)}...</span>
             </div>
             <div className="px-3 py-1.5 rounded-xl bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800">
               <span className="text-gray-400">Provider: </span>
               <span className="text-rose-600 dark:text-rose-400 capitalize font-bold">
-                {currentUser.providerData[0]?.providerId.replace('.com', '') || 'password'}
+                {currentUser.providerData?.[0]?.providerId?.replace('.com', '') || 'password'}
               </span>
             </div>
           </div>

@@ -1359,6 +1359,7 @@ curl -X POST \\
                     onClick={() => {
                       setShowCreateModal(false);
                       setCreatedKeyData(null);
+                      setCreateError('');
                     }}
                     className="px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
                   >
