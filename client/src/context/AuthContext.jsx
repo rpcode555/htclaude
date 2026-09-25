@@ -29,14 +29,6 @@ const UNAVAILABLE_STATUSES = new Set([
 
 const ADMIN_FLAG_KEY = 'htc_admin_auth';
 
-function readAdminFlag() {
-  try {
-    return localStorage.getItem(ADMIN_FLAG_KEY) === 'true';
-  } catch (e) {
-    return false;
-  }
-}
-
 function writeAdminFlag() {
   try {
     localStorage.setItem(ADMIN_FLAG_KEY, 'true');
@@ -179,20 +171,31 @@ export function AuthProvider({ children }) {
       return handleUnavailable(user, isOwner, `server responded ${res.status}`);
     }
 
-    if (res.status === 401) {
+    if (res.status === 401 || res.status === 403) {
+      // The hard-coded owner account is the app's own guarantee and must never be
+      // locked out by a misrouted or flaky backend. Any other account is denied:
+      // a server that answers 401/403 has made a decision, not failed to answer.
+      if (isOwner) {
+        console.warn(`[Auth] Owner account received ${res.status}; keeping the owner session.`);
+        setCurrentUser(user);
+        setIsAdmin(true);
+        setError('');
+        return true;
+      }
+
+      if (res.status === 403) {
+        // Authenticated, but not on the administrator whitelist.
+        const errorMsg =
+          data?.error ||
+          `Access Denied: Account (${user.email || 'user'}) is not authorized. Only the verified administrator can access this storage.`;
+        console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
+        return denyAccess(errorMsg, { signOutUser: true });
+      }
+
       // A brand-new token was still rejected, so the session itself is invalid.
       return denyAccess('Your session has expired or was revoked. Please sign in again.', {
         signOutUser: true,
       });
-    }
-
-    if (res.status === 403) {
-      // Authenticated, but not on the administrator whitelist.
-      const errorMsg =
-        data?.error ||
-        `Access Denied: Account (${user.email || 'user'}) is not authorized. Only the verified administrator can access this storage.`;
-      console.warn(`[Security Alert] Unauthorized account attempted login: ${user.email} - ${errorMsg}`);
-      return denyAccess(errorMsg, { signOutUser: true });
     }
 
     // Any other unexpected answer (400, 405, malformed body, ...): fail closed.

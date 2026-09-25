@@ -501,6 +501,9 @@ class Database {
     out.icon = out.icon || 'folder';
     out.is_trash = out.is_trash ? 1 : 0;
     out.trashed_at = out.is_trash ? (out.trashed_at || out.updated_at || new Date().toISOString()) : null;
+    // Remembers the trash operation a restored folder belongs to, so a later
+    // `updateFolder({is_trash: 0})` can tell co-trashed children from old ones.
+    out.restored_from_stamp = out.is_trash ? null : (out.restored_from_stamp || null);
     out.created_at = out.created_at || new Date().toISOString();
     out.updated_at = out.updated_at || out.created_at;
     return out;

@@ -38,6 +38,8 @@ function isSafeLocalPath(candidate) {
 function safePathPart(value, fallback = 'file', maxLength = 120) {
   const cleaned = String(value === undefined || value === null ? '' : value)
     .replace(/[^a-zA-Z0-9._-]/g, '_')
+    // No ".." anywhere in a generated component (also avoids Windows quirks).
+    .replace(/\.{2,}/g, '_')
     .replace(/^\.+/, '_')
     .slice(0, maxLength);
   return cleaned || fallback;

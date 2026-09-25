@@ -1,0 +1,12 @@
+{
+  "watch": [
+    "server/"
+  ],
+  "ignore": [
+    "server/data/*",
+    "server/uploads/*",
+    "server/temp_uploads/*",
+    "client/*",
+    "dist/*"
+  ]
+}

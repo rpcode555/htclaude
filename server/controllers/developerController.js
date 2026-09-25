@@ -6,7 +6,7 @@ const telegramService = require('../services/telegramService');
 const uploadTracker = require('../services/uploadTracker');
 const cloudDbService = require('../services/cloudDbService');
 
-const { isSafePath, isServerless } = require('../config/paths');
+const { isSafePath, isInsideRoot, TMP_ROOT, isServerless } = require('../config/paths');
 const { verifyAdminToken } = require('../middleware/authMiddleware');
 const { extractRawKey, KEY_PREFIX } = require('../middleware/apiKeyMiddleware');
 
@@ -384,6 +384,8 @@ function classifyUploadError(err) {
 /**
  * A result is only "durable" when the bytes are retrievable later:
  * a Telegram message id, or a real local file inside a persistent storage root.
+ * On serverless runtimes every writable directory is an ephemeral temp folder,
+ * so a local-only copy is explicitly NOT durable there.
  */
 function isDurableStorageResult(uploadResult) {
   if (!uploadResult) return false;
@@ -395,6 +397,11 @@ function isDurableStorageResult(uploadResult) {
   if (storageType && storageType !== 'local') return false;
   try {
     if (!isSafePath(localPath) || !fs.existsSync(localPath)) return false;
+    if (isServerless && isInsideRoot(TMP_ROOT, localPath)) {
+      // The file only lives in the instance temp folder: it disappears when the
+      // invocation ends, so reporting success would be a lie.
+      return false;
+    }
     return fs.statSync(localPath).size > 0;
   } catch (e) {
     return false;
@@ -479,21 +486,36 @@ async function resolveFileAccess(req, file) {
     const apiKeyRecord = await db.getApiKeyByKey(developerKey.key);
     if (!apiKeyRecord) return { authorized: false, reason: 'Invalid API Key.' };
     if (String(apiKeyRecord.status || 'active').toLowerCase() !== 'active') {
-      return { authorized: false, reason: 'This API Key has been revoked.' };
+      return { authorized: false, authenticated: true, reason: 'This API Key has been revoked.' };
     }
     if (apiKeyRecord.expires_at) {
       const expiry = new Date(apiKeyRecord.expires_at).getTime();
       if (Number.isFinite(expiry) && expiry < Date.now()) {
-        return { authorized: false, reason: 'This API Key has expired.' };
+        return { authorized: false, authenticated: true, reason: 'This API Key has expired.' };
       }
     }
     if (file.api_key_id && String(file.api_key_id) === String(apiKeyRecord.id)) {
       return { authorized: true, via: 'api-key' };
     }
-    return { authorized: false, reason: 'This API Key is not allowed to access that file.' };
+    return { authorized: false, authenticated: true, reason: 'This API Key is not allowed to access that file.' };
   }
 
   return { authorized: false, reason: 'Authentication required.' };
+}
+
+/**
+ * Turn a failed access check into the right status code:
+ * 401 when no valid credential was presented, 403 when a valid credential lacks
+ * permission for this file.
+ */
+function respondAccessDenied(res, access) {
+  if (access.reason && access.reason !== 'Authentication required.') {
+    if (access.authenticated) {
+      return res.status(403).json({ success: false, error: `Forbidden: ${access.reason}` });
+    }
+    return res.status(401).json({ success: false, error: `Unauthorized: ${access.reason}` });
+  }
+  return res.status(403).json({ success: false, error: 'Unauthorized: Private file is not shared.' });
 }
 
 /**
@@ -1068,10 +1090,7 @@ exports.serveRawFile = async (req, res) => {
     const isShared = file.is_shared === 1 || file.is_shared === true;
 
     if (!access.authorized && !isPublicAsset && !isShared) {
-      if (access.reason && access.reason !== 'Authentication required.') {
-        return res.status(401).json({ success: false, error: `Unauthorized: ${access.reason}` });
-      }
-      return res.status(403).json({ success: false, error: 'Unauthorized: Private file is not shared.' });
+      return respondAccessDenied(res, access);
     }
 
     const streamData = await telegramService.getFileStream(file);
@@ -1116,10 +1135,7 @@ exports.downloadRawFile = async (req, res) => {
     const isShared = file.is_shared === 1 || file.is_shared === true;
 
     if (!access.authorized && !isPublicAsset && !isShared) {
-      if (access.reason && access.reason !== 'Authentication required.') {
-        return res.status(401).json({ success: false, error: `Unauthorized: ${access.reason}` });
-      }
-      return res.status(403).json({ success: false, error: 'Unauthorized: Private file is not shared.' });
+      return respondAccessDenied(res, access);
     }
 
     const streamData = await telegramService.getFileStream(file);

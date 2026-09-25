@@ -19,15 +19,64 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const DEFAULT_PROJECT_ID = 'melodic-keyword-374810';
 const DEFAULT_FIREBASE_API_KEY = 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
 
 const IDENTITY_TOOLKIT_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:signUp';
 const SECURE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_JWT_BEARER_GRANT = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
+const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 const MAX_COLLECTION_PAGES = 5;
 const MAX_COLLECTION_PAGE_SIZE = 1000;
 const TOKEN_EXPIRY_SAFETY_MS = 60 * 1000;
+const AUTH_BACKOFF_MS = 5 * 60 * 1000;
+
+let serviceAccountCache;
+
+/**
+ * Load the Firebase service account from FIREBASE_SERVICE_ACCOUNT (raw JSON) or
+ * from the GOOGLE_APPLICATION_CREDENTIALS file. Returns null when neither is
+ * configured.
+ */
+function getServiceAccount() {
+  if (serviceAccountCache !== undefined) return serviceAccountCache;
+
+  const raw = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim();
+  if (raw) {
+    try {
+      serviceAccountCache = JSON.parse(raw);
+    } catch (e) {
+      console.warn('[Firestore] FIREBASE_SERVICE_ACCOUNT is not valid JSON:', e.message);
+      serviceAccountCache = null;
+    }
+    return serviceAccountCache;
+  }
+
+  const filePath = (process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+  if (filePath) {
+    try {
+      if (fs.existsSync(filePath)) {
+        serviceAccountCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      } else {
+        console.warn(`[Firestore] GOOGLE_APPLICATION_CREDENTIALS file not found: ${filePath}`);
+        serviceAccountCache = null;
+      }
+    } catch (e) {
+      console.warn('[Firestore] Could not read the service account file:', e.message);
+      serviceAccountCache = null;
+    }
+  }
+
+  if (serviceAccountCache === undefined) serviceAccountCache = null;
+  return serviceAccountCache;
+}
+
+function base64url(input) {
+  return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 let dotenvLoaded = false;
 
@@ -198,10 +247,27 @@ async function readErrorBody(res) {
   }
 }
 
+/**
+ * Parse a JSON body without relying on `res.json()` (not every fetch polyfill in
+ * a serverless runtime implements it).
+ */
+async function readJsonBody(res) {
+  try {
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
 class FirestoreService {
   constructor() {
     this.lastSync = 0;
     this._warnedMissingAuth = false;
+    this._warnedAuthRejected = false;
+    // Cooldown after Firestore answered 401/403 for the credentials in use.
+    this._authBlockedUntil = 0;
     // Negative cache so a misconfigured project is not re-authenticated on
     // every single request (an anonymous sign-in creates a new user each time).
     this._authFailureAt = 0;
@@ -269,6 +335,14 @@ class FirestoreService {
     }
 
     this._tokenPromise = (async () => {
+      // 1. A service account (private key) is the standard server side way to
+      //    get an OAuth2 access token for Firestore.
+      const serviceAccount = getServiceAccount();
+      if (serviceAccount) {
+        const token = await this.fetchServiceAccountToken(serviceAccount);
+        if (token) return token;
+      }
+
       const refreshToken = config.refreshToken || this._refreshToken;
       if (refreshToken) {
         const exchanged = await this.exchangeRefreshToken(refreshToken, config);
@@ -297,7 +371,8 @@ class FirestoreService {
           this._warnedMissingAuth = true;
           console.warn(
             '[Firestore] No usable credentials: cloud sync for Firestore is disabled. ' +
-              'Configure FIREBASE_REFRESH_TOKEN or FIREBASE_OAUTH_ACCESS_TOKEN (or enable the Firebase Anonymous auth provider).'
+              'Configure FIREBASE_SERVICE_ACCOUNT (or GOOGLE_APPLICATION_CREDENTIALS), FIREBASE_REFRESH_TOKEN ' +
+              'or FIREBASE_OAUTH_ACCESS_TOKEN, or enable the Firebase Anonymous auth provider.'
           );
         }
       } else {
@@ -330,7 +405,7 @@ class FirestoreService {
         return null;
       }
 
-      const data = await res.json();
+      const data = await readJsonBody(res);
       if (!data?.access_token) {
         console.warn('[Firestore] Refresh token exchange returned no access_token.');
         return null;
@@ -362,7 +437,7 @@ class FirestoreService {
         return null;
       }
 
-      const data = await res.json();
+      const data = await readJsonBody(res);
       if (!data?.idToken) {
         console.warn('[Firestore] Anonymous sign-in returned no idToken.');
         return null;
@@ -371,6 +446,90 @@ class FirestoreService {
     } catch (err) {
       console.warn('[Firestore] Anonymous sign-in error:', err.message);
       return null;
+    }
+  }
+
+  /**
+   * Sign a JWT with the service account private key and exchange it for an
+   * OAuth2 access token (the credential type Firestore REST actually accepts).
+   */
+  async fetchServiceAccountToken(serviceAccount) {
+    try {
+      const clientEmail = serviceAccount.client_email;
+      const privateKey = String(serviceAccount.private_key || '').replace(/\\n/g, '\n');
+      if (!clientEmail || !privateKey) {
+        console.warn('[Firestore] Service account is missing client_email/private_key.');
+        return null;
+      }
+
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+      const claims = base64url(
+        JSON.stringify({
+          iss: clientEmail,
+          scope: FIRESTORE_SCOPE,
+          aud: GOOGLE_TOKEN_URL,
+          iat: issuedAt,
+          exp: issuedAt + 3600,
+        })
+      );
+      const signer = crypto.createSign('RSA-SHA256');
+      signer.update(`${header}.${claims}`);
+      const assertion = `${header}.${claims}.${base64url(signer.sign(privateKey))}`;
+
+      const res = await fetch(GOOGLE_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: GOOGLE_JWT_BEARER_GRANT,
+          assertion,
+        }).toString(),
+      });
+
+      if (!res.ok) {
+        const body = await readErrorBody(res);
+        console.warn(`[Firestore] Service account token exchange failed (${res.status}${body ? `: ${body}` : ''}).`);
+        return null;
+      }
+
+      const data = await readJsonBody(res);
+      if (!data?.access_token) {
+        console.warn('[Firestore] Service account token exchange returned no access_token.');
+        return null;
+      }
+
+      const expiresInMs = (Number(data.expires_in) || 3600) * 1000;
+      this._accessToken = { token: data.access_token, expiresAt: Date.now() + expiresInMs };
+      return data.access_token;
+    } catch (err) {
+      console.warn('[Firestore] Service account authentication error:', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Requests are pointless while the stored credentials are rejected. Cooldown
+   * after an auth error instead of failing 4 requests on every sync.
+   */
+  isAuthBlocked() {
+    return Date.now() < this._authBlockedUntil;
+  }
+
+  blockAuthTemporarily() {
+    this._authBlockedUntil = Date.now() + AUTH_BACKOFF_MS;
+  }
+
+  noteAuthError(err) {
+    if (err instanceof FirestoreRequestError && (err.status === 401 || err.status === 403)) {
+      this.blockAuthTemporarily();
+      if (!this._warnedAuthRejected) {
+        this._warnedAuthRejected = true;
+        console.warn(
+          `[Firestore] Firestore rejected the stored credentials (${err.status}: ${err.body || 'no detail'}). ` +
+            'Cloud sync is paused for 5 minutes - configure a service account (FIREBASE_SERVICE_ACCOUNT / ' +
+            'GOOGLE_APPLICATION_CREDENTIALS) and grant the service account the "Cloud Datastore User" role.'
+        );
+      }
     }
   }
 
@@ -414,6 +573,7 @@ class FirestoreService {
    */
   async getCollection(collectionName, authToken = '') {
     if (!this.isEnabled()) return null;
+    if (this.isAuthBlocked()) return null;
     const config = getConfig();
     const results = [];
 
@@ -435,8 +595,8 @@ class FirestoreService {
           );
         }
 
-        const data = await res.json();
-        if (!data.documents || !Array.isArray(data.documents)) break;
+        const data = await readJsonBody(res);
+        if (!data || !data.documents || !Array.isArray(data.documents)) break;
         results.push(...data.documents.map((doc) => fromFirestore(doc)).filter(Boolean));
 
         pageToken = data.nextPageToken || null;
@@ -451,6 +611,7 @@ class FirestoreService {
 
       return results;
     } catch (err) {
+      this.noteAuthError(err);
       console.warn(`[Firestore] Error fetching collection ${collectionName}:`, err.message);
       return null;
     }
@@ -461,11 +622,13 @@ class FirestoreService {
    */
   async getDocument(collectionName, docId, authToken = '') {
     if (!this.isEnabled() || !docId) return null;
+    if (this.isAuthBlocked()) return null;
     try {
       const data = await this.request(`${collectionName}/${encodeURIComponent(docId)}`, { authToken, allow404: true });
       if (!data) return null;
       return fromFirestore(data);
     } catch (err) {
+      this.noteAuthError(err);
       console.warn(`[Firestore] Error fetching document ${collectionName}/${docId}:`, err.message);
       return null;
     }
@@ -481,6 +644,7 @@ class FirestoreService {
    */
   async setDocument(collectionName, docId, data, authToken = '') {
     if (!this.isEnabled() || !docId) return false;
+    if (this.isAuthBlocked()) return false;
     const config = getConfig();
     const documentPath = `${collectionName}/${encodeURIComponent(docId)}`;
 
@@ -519,6 +683,7 @@ class FirestoreService {
           return false;
         }
       }
+      this.noteAuthError(err);
       console.warn(`[Firestore] Error setting document ${collectionName}/${docId}:`, err.message);
       return false;
     }
@@ -529,6 +694,7 @@ class FirestoreService {
    */
   async deleteDocument(collectionName, docId, authToken = '') {
     if (!this.isEnabled() || !docId) return false;
+    if (this.isAuthBlocked()) return false;
     try {
       await this.request(`${collectionName}/${encodeURIComponent(docId)}`, {
         method: 'DELETE',
@@ -537,6 +703,7 @@ class FirestoreService {
       });
       return true;
     } catch (err) {
+      this.noteAuthError(err);
       console.warn(`[Firestore] Error deleting document ${collectionName}/${docId}:`, err.message);
       return false;
     }

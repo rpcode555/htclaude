@@ -504,11 +504,13 @@ function MainApp() {
   const handleCreateFolder = async (name, color) => {
     try {
       const res = await api.createFolder(name, currentFolderId, color);
-      if (res.success) {
-        await loadData();
+      if (res && res.success === false) {
+        showToast(`❌ Could not create folder: ${res.error || 'Unknown server error'}`);
+        return;
       }
+      await loadData();
     } catch (err) {
-      alert(`Could not create folder: ${err.message}`);
+      showToast(`❌ Could not create folder: ${err.message}`);
     }
   };
 
@@ -591,11 +593,14 @@ function MainApp() {
   const handleToggleStar = async (fileId, isStarred) => {
     setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, is_starred: isStarred ? 1 : 0 } : f)));
     try {
-      await api.updateFile(fileId, { is_starred: isStarred });
-      await loadData();
+      const res = await api.updateFile(fileId, { is_starred: isStarred });
+      if (res && res.success === false) {
+        showToast(`❌ Could not update star: ${res.error || 'Unknown server error'}`);
+      }
+      await Promise.all([loadData(), loadFiles()]);
     } catch (err) {
       await loadFiles();
-      console.error(err);
+      showToast(`❌ Could not update star: ${err.message}`);
     }
   };
 

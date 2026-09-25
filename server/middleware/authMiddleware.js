@@ -135,9 +135,9 @@ function validateClaims(payload, projectId, now = Date.now()) {
     if (payload.iat > nowSeconds + 60 + CLOCK_SKEW_SECONDS) return null;
   }
 
-  const uid = typeof payload.sub === 'string' && payload.sub.trim()
-    ? payload.sub.trim()
-    : (typeof payload.user_id === 'string' && payload.user_id.trim() ? payload.user_id.trim() : '');
+  // Firebase ID tokens always carry a non-empty `sub`. Do not fall back to
+  // phone-oriented identity claims for administrator authentication.
+  const uid = typeof payload.sub === 'string' ? payload.sub.trim() : '';
   if (!uid) return null;
 
   const email = normalizeEmail(payload.email);
@@ -381,11 +381,11 @@ function getSessionInputs(req) {
   const values = [];
 
   if (header.present) {
-    if (!header.valid) return { valid: false, values };
+    if (!header.valid || header.value.length > MAX_SESSION_LENGTH) return { valid: false, values };
     values.push(header.value);
   }
   if (query.present) {
-    if (!query.valid) return { valid: false, values };
+    if (!query.valid || query.value.length > MAX_SESSION_LENGTH) return { valid: false, values };
     values.push(query.value);
   }
 
@@ -469,8 +469,22 @@ function isLegacyMediaPath(req) {
   const requestPath = typeof req?.path === 'string' ? req.path : '';
   return (
     /^\/files\/upload-progress\/[^/]+$/.test(requestPath) ||
-    /^\/files\/[^/]+\/(?:download|stream)$/.test(requestPath)
+    isSharedMediaPath(req)
   );
+}
+
+function isSharedMediaPath(req) {
+  const requestPath = typeof req?.path === 'string' ? req.path : '';
+  return /^\/files\/[^/]+\/(?:download|stream)$/.test(requestPath);
+}
+
+async function isPubliclySharedFile(req) {
+  const fileId = typeof req?.params?.id === 'string' ? req.params.id : '';
+  if (!fileId || !isSharedMediaPath(req)) return false;
+
+  const { db } = require('../db');
+  const file = await db.getFileById(fileId);
+  return !!file && !file.is_trash && (file.is_shared === 1 || file.is_shared === true);
 }
 
 function unauthorized(res) {
@@ -490,6 +504,8 @@ function forbidden(res) {
 async function requireAdminAuth(req, res, next) {
   if (req.method === 'OPTIONS') return next();
 
+  const authorizationHeader = req?.headers?.authorization ?? req?.headers?.Authorization;
+  const hasAuthorizationHeader = authorizationHeader !== undefined;
   const bearerToken = getBearerToken(req);
   let verifiedUser = null;
 
@@ -523,11 +539,35 @@ async function requireAdminAuth(req, res, next) {
     return next();
   }
 
+  // Explicitly shared files remain readable by their public share links. This
+  // is a narrow data check, not a general bypass: private files still require
+  // Firebase (or the exact active Telegram session below).
+  if (!hasAuthorizationHeader && isSharedMediaPath(req)) {
+    try {
+      if (await isPubliclySharedFile(req)) {
+        // Do not let a legacy query token/session reach the streaming
+        // controller; the public-share decision above is sufficient.
+        clearRequestCredentials(req);
+        req.user = {
+          uid: 'public-share',
+          email: null,
+          emailVerified: false,
+          isAdmin: false,
+          authMethod: 'public-share',
+        };
+        return next();
+      }
+    } catch (error) {
+      console.warn('[Security] Shared-file authorization lookup failed:', error.message);
+    }
+  }
+
   // A legacy media-only compatibility path may use the already active
   // Telegram session. It is deliberately unavailable for administrative
   // routes, and it is accepted only after a constant-time comparison with the
-  // server-stored value.
-  if (isLegacyMediaPath(req)) {
+  // server-stored value. If an Authorization header was supplied but is
+  // malformed, fail closed instead of silently switching credentials.
+  if (!hasAuthorizationHeader && isLegacyMediaPath(req)) {
     try {
       const inputs = getSessionInputs(req);
       if (inputs.valid && inputs.values.length > 0) {
