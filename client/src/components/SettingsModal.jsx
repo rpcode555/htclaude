@@ -47,6 +47,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
 
   // QR Login State
   const [qrLoading, setQrLoading] = useState(false);
+  const [qrAuthenticating, setQrAuthenticating] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrTempSession, setQrTempSession] = useState('');
   const [qrRequires2FA, setQrRequires2FA] = useState(false);
@@ -83,14 +84,13 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
         const res = await api.checkQrCode(currentSession, '', apiId.trim() || null, apiHash.trim() || null);
         if (res.status === 'success' || res.success) {
           stopQrPolling();
+          setQrAuthenticating(true);
           if (res.sessionString) {
             localStorage.setItem('htc_tg_session', res.sessionString);
           }
-          setSuccessMsg('Successfully linked Telegram Saved Messages via QR Code! Syncing files...');
-          try {
-            await api.syncTelegram();
-          } catch (e) {}
+          setSuccessMsg('✅ Telegram QR Scanned Successfully! Connecting to your account...');
           await onRefreshStatus();
+          setQrAuthenticating(false);
         } else if (res.status === 'requires2FA') {
           stopQrPolling();
           setQrRequires2FA(true);
@@ -110,7 +110,7 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
       } catch (e) {
         // silently continue polling
       }
-    }, 3000);
+    }, 1200);
   };
 
   const loadQrCode = async () => {
@@ -589,7 +589,33 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                   {loginMethod === 'qr' && (
                     <div className="space-y-4 animate-fade-in">
                       <div className="p-6 rounded-2xl bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 flex flex-col items-center justify-center text-center">
-                        {qrLoading ? (
+                        {qrAuthenticating ? (
+                          <div className="py-12 px-6 flex flex-col items-center justify-center gap-4 text-center animate-fade-in w-full max-w-sm">
+                            <div className="relative flex items-center justify-center">
+                              <div className="w-20 h-20 rounded-3xl bg-emerald-50 dark:bg-emerald-950/50 border-2 border-emerald-500/40 flex items-center justify-center shadow-2xl shadow-emerald-500/30 animate-pulse">
+                                <Send className="w-10 h-10 text-[#229ED9]" />
+                              </div>
+                              <div className="absolute -inset-2.5 rounded-3xl border-2 border-rose-500 border-t-transparent animate-spin pointer-events-none" />
+                            </div>
+
+                            <div className="space-y-1.5 mt-2">
+                              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold shadow-xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                <span>QR Scan Confirmed!</span>
+                              </div>
+                              <h4 className="text-sm font-bold text-gray-900 dark:text-white">
+                                Logging into Telegram Saved Messages...
+                              </h4>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Authenticating session & preparing your cloud files
+                              </p>
+                            </div>
+
+                            <div className="w-48 h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden mt-2">
+                              <div className="h-full bg-gradient-to-r from-rose-500 via-pink-500 to-emerald-500 rounded-full animate-pulse w-full" />
+                            </div>
+                          </div>
+                        ) : qrLoading ? (
                           <div className="py-12 flex flex-col items-center justify-center gap-3">
                             <RefreshCw className="w-8 h-8 text-rose-500 animate-spin" />
                             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
@@ -815,9 +841,20 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                           </div>
                         )}
 
+                        {loading && (
+                          <div className="p-3.5 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-3 animate-fade-in">
+                            <RefreshCw className="w-4 h-4 text-rose-500 animate-spin shrink-0" />
+                            <div className="space-y-0.5">
+                              <span className="font-bold">Verifying code & connecting to Telegram...</span>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">Authenticating session with Telegram cloud</p>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex gap-2.5">
                           <button
                             type="button"
+                            disabled={loading}
                             onClick={() => { setCodeSent(false); setOtpCode(''); setPhoneCodeHash(''); setTempSession(''); }}
                             className="flex-1 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-semibold transition-colors cursor-pointer"
                           >
@@ -826,9 +863,16 @@ export default function SettingsModal({ authStatus, onClose, onRefreshStatus }) 
                           <button
                             type="submit"
                             disabled={loading}
-                            className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-rose-500/20"
+                            className="btn-primary flex-1 py-2.5 rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-rose-500/20 flex items-center justify-center gap-2"
                           >
-                            {loading ? 'Verifying...' : 'Verify & Connect'}
+                            {loading ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Verifying & Logging In...</span>
+                              </>
+                            ) : (
+                              <span>Verify & Connect</span>
+                            )}
                           </button>
                         </div>
                       </form>

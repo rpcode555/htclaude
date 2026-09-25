@@ -99,11 +99,9 @@ exports.verifyCode = async (req, res) => {
 
     const result = await telegramService.verifyPhoneCode(code, password, phoneCodeHash, phoneNumber, tempSession);
     if (result && (result.success || result.status === 'success') && result.sessionString) {
-      try {
-        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
-      } catch (syncErr) {
+      telegramService.syncFromTelegramSavedMessages(result.sessionString).catch((syncErr) => {
         console.warn('[Auth] Auto sync after phone login notice:', syncErr.message);
-      }
+      });
     }
     res.json(result);
   } catch (err) {
@@ -133,11 +131,9 @@ exports.connectSessionString = async (req, res) => {
 
     const result = await telegramService.connectSessionString(apiId, apiHash, sessionString);
     if (result && result.success && result.sessionString) {
-      try {
-        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
-      } catch (syncErr) {
+      telegramService.syncFromTelegramSavedMessages(result.sessionString).catch((syncErr) => {
         console.warn('[Auth] Auto sync after session connect notice:', syncErr.message);
-      }
+      });
     }
     res.json(result);
   } catch (err) {
@@ -171,11 +167,9 @@ exports.checkQrCode = async (req, res) => {
 
     const result = await telegramService.checkQrCode(tempSession, password, apiId, apiHash);
     if (result && (result.success || result.status === 'success') && result.sessionString) {
-      try {
-        await telegramService.syncFromTelegramSavedMessages(result.sessionString);
-      } catch (syncErr) {
+      telegramService.syncFromTelegramSavedMessages(result.sessionString).catch((syncErr) => {
         console.warn('[Auth] Auto sync after QR login notice:', syncErr.message);
-      }
+      });
     }
     res.json(result);
   } catch (err) {

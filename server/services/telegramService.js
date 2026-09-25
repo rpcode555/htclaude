@@ -27,6 +27,7 @@ class TelegramService {
     this.tempPhoneCodeHash = null;
     this.tempPhoneNumber = null;
     this.listenerAttached = false;
+    this.qrClient = null;
     this._initPromise = null;
     this._hasLoggedNoSession = false;
   }
@@ -454,6 +455,7 @@ class TelegramService {
     this.client = client;
     this.authType = 'saved_messages';
     this.tempClient = null;
+    this.qrClient = null;
     this.tempPhoneCodeHash = null;
     this.tempPhoneNumber = null;
     this.setupSavedMessagesListener();
@@ -512,6 +514,8 @@ class TelegramService {
       color: { dark: '#000000', light: '#ffffff' },
     });
 
+    this.qrClient = client;
+
     return {
       success: true,
       token: tokenBase64,
@@ -533,13 +537,16 @@ class TelegramService {
       throw new Error('QR session is missing. Please refresh the QR code.');
     }
 
-    const stringSession = new StringSession(tempSession);
-    const client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
-      connectionRetries: 5,
-      useWSS: false,
-    });
-
-    await client.connect();
+    let client = this.qrClient;
+    if (!client || !client.connected || (tempSession && client.session.save() !== tempSession)) {
+      const stringSession = new StringSession(tempSession);
+      client = new TelegramClient(stringSession, cleanApiId, cleanApiHash, {
+        connectionRetries: 3,
+        useWSS: false,
+      });
+      await client.connect();
+      this.qrClient = client;
+    }
 
     let result;
     try {
