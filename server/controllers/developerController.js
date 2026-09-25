@@ -318,10 +318,10 @@ exports.serveRawFile = async (req, res) => {
       res.setHeader('Content-Length', streamData.size);
     }
 
-    // Support HTTP 206 Partial Content Range Requests for Video / Audio
-    if (streamData.localPath && fs.existsSync(streamData.localPath) && isSafePath(streamData.localPath)) {
-      const stat = fs.statSync(streamData.localPath);
-      const fileSize = stat.size;
+    // Support HTTP 206 Partial Content Range Requests for Video / Audio directly on in-memory buffer
+    if (streamData.type === 'buffer' && streamData.buffer) {
+      const buffer = streamData.buffer;
+      const fileSize = buffer.length;
       const range = req.headers.range;
 
       if (range) {
@@ -341,15 +341,17 @@ exports.serveRawFile = async (req, res) => {
         if (isExecutableMime) headers['Content-Security-Policy'] = cspHeader;
 
         res.writeHead(206, headers);
-        fs.createReadStream(streamData.localPath, { start, end }).pipe(res);
+        res.end(buffer.slice(start, end + 1));
         return;
       }
+
+      if (isExecutableMime) res.setHeader('Content-Security-Policy', cspHeader);
+      return res.send(buffer);
     }
 
     if (streamData.type === 'stream') {
       streamData.stream.pipe(res);
-    } else if (streamData.type === 'buffer') {
-      res.send(streamData.buffer);
+      return;
     }
   } catch (err) {
     console.error('[DeveloperController] serveRawFile error:', err);

@@ -20,7 +20,7 @@ import AuthGate from './components/AuthGate';
 import { useConfirm } from './context/ConfirmContext';
 
 function MainApp() {
-  const { isAuthorized, loading: authLoading } = useAuth();
+  const { isAuthorized, loading: authLoading, currentUser } = useAuth();
   const confirm = useConfirm();
 
   // Navigation & Filter States
@@ -197,7 +197,13 @@ function MainApp() {
           : currentView === 'recent'
           ? 'recent'
           : 'all';
-      const folder_id = currentView === 'all' && !selectedCategory ? currentFolderId : undefined;
+      // Root browsing is explicit ("root"), otherwise the backend applies no
+      // folder filter at all and every file shows up both at root and inside its
+      // folder. While searching we intentionally search the whole cloud.
+      const folder_id =
+        currentView === 'all' && !selectedCategory && !debouncedSearch
+          ? currentFolderId ?? 'root'
+          : undefined;
       const category = selectedCategory || undefined;
 
       const res = await api.getFiles({
@@ -344,6 +350,8 @@ function MainApp() {
           if (progress.fileIndex !== undefined) {
             setUploadQueue((prev) =>
               prev.map((item, idx) => {
+                // Never revive a file that already failed or completed
+                if (item.status === 'error' || item.status === 'done') return item;
                 if (idx < progress.fileIndex) return { ...item, status: 'done', percent: 100 };
                 if (idx === progress.fileIndex) {
                   return {
@@ -380,11 +388,36 @@ function MainApp() {
                 : item
             )
           );
+        },
+        (err, fileIndex) => {
+          // Queue-aware failure: only this file is marked as failed so the rest
+          // of the batch keeps uploading.
+          setUploadQueue((prev) =>
+            prev.map((item, idx) =>
+              idx === fileIndex
+                ? {
+                    ...item,
+                    status: 'error',
+                    stage: 'error',
+                    stageText: 'Failed',
+                    error: err?.message || 'Upload failed.',
+                  }
+                : item
+            )
+          );
         }
       );
 
+      const failedFiles = Array.isArray(uploadRes?.errors) ? uploadRes.errors : [];
+
       setUploadProgress(100);
-      setUploadQueue((prev) => prev.map((item) => ({ ...item, status: 'done' })));
+      setUploadQueue((prev) =>
+        prev.map((item, idx) => {
+          if (item.status === 'error' || item.status === 'done') return item;
+          if (failedFiles.some((failed) => failed.index === idx)) return item;
+          return { ...item, status: 'done', percent: 100, stage: 'completed', stageText: 'Completed!' };
+        })
+      );
 
       // Real-time instantaneous optimistic UI insertion (0ms delay)
       if (uploadRes && uploadRes.files && Array.isArray(uploadRes.files) && uploadRes.files.length > 0) {
@@ -396,9 +429,23 @@ function MainApp() {
       }
 
       await Promise.all([loadFiles(), loadData()]);
+
+      if (failedFiles.length > 0) {
+        showToast(
+          `⚠️ ${uploadRes.uploaded} of ${uploadRes.total} file(s) uploaded — ${failedFiles.length} failed. Open the upload panel for details.`,
+          6000
+        );
+      }
     } catch (err) {
       console.error('Upload failed:', err);
-      setUploadQueue((prev) => prev.map((item) => ({ ...item, status: 'error' })));
+      // Defensive fallback: only unfinished entries become failures.
+      setUploadQueue((prev) =>
+        prev.map((item) =>
+          item.status === 'done' || item.status === 'error'
+            ? item
+            : { ...item, status: 'error', stageText: 'Failed', error: err.message }
+        )
+      );
       showToast(`Upload failed: ${err.message}`);
     } finally {
       setIsUploading(false);
@@ -523,18 +570,22 @@ function MainApp() {
   // File Actions
   const handleDownloadFile = async (file) => {
     if (!file) return;
+    let idToken = '';
     try {
-      const idToken = currentUser ? await currentUser.getIdToken() : '';
-      const downloadUrl = api.getDownloadUrl(file.id, idToken);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = file.name;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      idToken = currentUser ? await currentUser.getIdToken() : '';
     } catch (err) {
-      window.open(api.getDownloadUrl(file.id), '_blank');
+      // Fall back to the session-based download link instead of failing outright
+      console.warn('[App] Could not refresh ID token for download:', err.message);
     }
+
+    const downloadUrl = api.getDownloadUrl(file.id, idToken || null);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = file.name;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleToggleStar = async (fileId, isStarred) => {
@@ -627,14 +678,29 @@ function MainApp() {
     }
   };
 
+  // Returns true when the move succeeded, so MoveModal can stay open on failure
   const handleMoveFiles = async (targetFolderId) => {
     const movedIds = [...selectedFiles];
-    setSelectedFiles([]);
+    if (movedIds.length === 0) {
+      setIsMoveModalOpen(false);
+      return true;
+    }
+
     try {
-      await api.batchAction('move', movedIds, targetFolderId);
+      const res = await api.batchAction('move', movedIds, targetFolderId);
+      if (res && res.success === false) {
+        showToast(`❌ Move failed: ${res.error || 'Unknown server error'}`);
+        await Promise.all([loadFiles(), loadData()]);
+        return false;
+      }
+      setSelectedFiles([]);
       await Promise.all([loadFiles(), loadData()]);
+      showToast(`📦 Moved ${movedIds.length} item(s) successfully.`);
+      return true;
     } catch (err) {
-      alert(err.message);
+      showToast(`❌ Move failed: ${err.message}`);
+      await Promise.all([loadFiles(), loadData()]);
+      return false;
     }
   };
 

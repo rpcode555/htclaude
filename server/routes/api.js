@@ -10,7 +10,7 @@ const fileController = require('../controllers/fileController');
 const developerController = require('../controllers/developerController');
 const { requireAdminAuth } = require('../middleware/authMiddleware');
 const { requireApiKey } = require('../middleware/apiKeyMiddleware');
-const { authLimiter, uploadLimiter, apiLimiter } = require('../middleware/rateLimitMiddleware');
+const { authLimiter, uploadLimiter } = require('../middleware/rateLimitMiddleware');
 
 const { TEMP_UPLOAD_DIR } = require('../config/paths');
 
@@ -42,37 +42,6 @@ router.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
-  next();
-});
-
-// Auto-sync Telegram session token from client requests (essential for stateless/serverless runtimes)
-router.use(async (req, res, next) => {
-  try {
-    const isManualDisconnectRequest =
-      req.headers['x-telegram-manual-disconnect'] === 'true' ||
-      req.query?.disconnected === 'true' ||
-      req.path === '/auth/disconnect';
-
-    if (isManualDisconnectRequest) {
-      return next();
-    }
-
-    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    if (clientSession && clientSession.length > 20) {
-      const { getSetting, setSetting } = require('../db');
-      const isManual = (await getSetting('manual_disconnect')) === true;
-      if (!isManual) {
-        const currentSession = await getSetting('session_string');
-        if (!currentSession || currentSession !== clientSession) {
-          await setSetting('session_string', clientSession);
-          await setSetting('manual_disconnect', false);
-          await setSetting('auth_type', 'saved_messages');
-        }
-      }
-    }
-  } catch (e) {
-    // Non-blocking
-  }
   next();
 });
 
@@ -124,11 +93,11 @@ router.get('/auth/me', requireAdminAuth, authController.getMe);
 router.get('/auth/status', requireAdminAuth, authController.getStatus);
 router.post('/auth/send-code', authLimiter, requireAdminAuth, authController.sendCode);
 router.post('/auth/verify-code', authLimiter, requireAdminAuth, authController.verifyCode);
-router.post('/auth/qr-code', apiLimiter, requireAdminAuth, authController.getQrCode);
-router.post('/auth/check-qr', apiLimiter, requireAdminAuth, authController.checkQrCode);
+router.post('/auth/qr-code', requireAdminAuth, authController.getQrCode);
+router.post('/auth/check-qr', requireAdminAuth, authController.checkQrCode);
 router.post('/auth/session-connect', authLimiter, requireAdminAuth, authController.connectSessionString);
-router.post('/auth/sync-telegram', apiLimiter, requireAdminAuth, authController.syncTelegram);
-router.get('/auth/sync-telegram', apiLimiter, requireAdminAuth, authController.syncTelegram);
+router.post('/auth/sync-telegram', requireAdminAuth, authController.syncTelegram);
+router.get('/auth/sync-telegram', requireAdminAuth, authController.syncTelegram);
 router.post('/auth/backup-db', requireAdminAuth, authController.backupDatabase);
 router.post('/auth/disconnect', requireAdminAuth, authController.disconnect);
 router.post('/auth/settings', requireAdminAuth, authController.updateSettings);
@@ -144,11 +113,11 @@ router.post('/folders/:id/restore', requireAdminAuth, folderController.restoreFo
 router.get('/files', requireAdminAuth, fileController.listFiles);
 router.get('/files/:id', requireAdminAuth, fileController.getFile);
 router.post('/files/upload', uploadLimiter, requireAdminAuth, upload.any(), fileController.uploadFiles);
-router.get('/files/upload-progress/:uploadId', fileController.getUploadProgress);
+router.get('/files/upload-progress/:uploadId', requireAdminAuth, fileController.getUploadProgress);
 router.post('/files/create', requireAdminAuth, fileController.createNoteFile);
 router.put('/files/:id/content', requireAdminAuth, fileController.updateFileContent);
 router.get('/files/:id/download', requireAdminAuth, fileController.downloadFile);
-router.get('/files/:id/stream', fileController.streamFile);
+router.get('/files/:id/stream', requireAdminAuth, fileController.streamFile);
 router.patch('/files/:id', requireAdminAuth, fileController.updateFile);
 router.delete('/files/:id/trash', requireAdminAuth, fileController.trashFile);
 router.post('/files/:id/restore', requireAdminAuth, fileController.restoreFile);

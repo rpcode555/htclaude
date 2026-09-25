@@ -14,40 +14,60 @@ function getEnvFilePath() {
   return path.resolve(__dirname, '../.env');
 }
 
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
- * Updates process.env and safely writes changes to the local .env file
+ * Values that contain dotenv-significant characters are JSON quoted so spaces,
+ * comments, quotes, backslashes, and newlines round-trip safely.
+ */
+function serializeEnvValue(value) {
+  const normalized = value === null || value === undefined ? '' : String(value);
+  if (!/[\r\n#]/.test(normalized) && normalized === normalized.trim()) {
+    return normalized;
+  }
+  return JSON.stringify(normalized);
+}
+
+/**
+ * Updates process.env and safely writes changes to the local .env file.
+ * Invalid environment variable names are rejected instead of being injected
+ * into the dotenv file as arbitrary lines.
  */
 function updateEnvFile(updates) {
-  if (!updates || typeof updates !== 'object') return false;
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) return false;
 
-  // 1. Update in-memory process.env immediately
-  for (const [k, v] of Object.entries(updates)) {
-    if (v === null || v === undefined) {
-      delete process.env[k];
+  const entries = Object.entries(updates).filter(([key]) => ENV_KEY_PATTERN.test(key));
+  if (entries.length === 0) return false;
+
+  // Update in-memory process.env only after validating every supplied key.
+  for (const [key, value] of entries) {
+    if (value === null || value === undefined) {
+      delete process.env[key];
     } else {
-      process.env[k] = String(v);
+      process.env[key] = String(value);
     }
   }
 
-  // 2. Persist to disk if .env file exists or is creatable
   try {
     const targetFile = getEnvFilePath();
-    let content = '';
-    if (fs.existsSync(targetFile)) {
-      content = fs.readFileSync(targetFile, 'utf8');
+    let content = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf8') : '';
+
+    for (const [key, value] of entries) {
+      const serialized = `${key}=${serializeEnvValue(value)}`;
+      const linePattern = new RegExp(`^${key}\\s*=.*$`, 'm');
+      content = linePattern.test(content)
+        ? content.replace(linePattern, serialized)
+        : `${content.trimEnd()}${content.length ? '\n' : ''}${serialized}\n`;
     }
 
-    for (const [key, value] of Object.entries(updates)) {
-      const valStr = value === null || value === undefined ? '' : String(value);
-      const regex = new RegExp(`^${key}=.*$`, 'm');
-      if (regex.test(content)) {
-        content = content.replace(regex, `${key}=${valStr}`);
-      } else {
-        content = (content.trimEnd() + `\n${key}=${valStr}\n`).trimStart();
-      }
-    }
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+    const tempFile = `${targetFile}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempFile, content.trim() + '\n', { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tempFile, targetFile);
 
-    fs.writeFileSync(targetFile, content.trim() + '\n', 'utf8');
+    if (process.platform !== 'win32') {
+      fs.chmodSync(targetFile, 0o600);
+    }
     return true;
   } catch (err) {
     console.warn('[EnvHelper] Notice: Could not write .env to disk (normal in read-only serverless):', err.message);
@@ -57,5 +77,6 @@ function updateEnvFile(updates) {
 
 module.exports = {
   getEnvFilePath,
+  serializeEnvValue,
   updateEnvFile,
 };

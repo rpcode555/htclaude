@@ -1,16 +1,157 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const mime = require('mime-types');
-const { db, detectCategory, getSetting } = require('../db');
+const { db, detectCategory, getSetting, normalizeTags, normalizeMessageId, normalizeMessageIds } = require('../db');
 const telegramService = require('../services/telegramService');
 const uploadTracker = require('../services/uploadTracker');
 
-const { UPLOADS_DIR, isSafePath } = require('../config/paths');
+const { UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR } = require('../config/paths');
 const { verifyAdminToken } = require('../middleware/authMiddleware');
+
+const ALLOWED_FILE_FILTERS = new Set(['all', 'trash', 'starred', 'recent']);
+const ALLOWED_BATCH_ACTIONS = new Set(['star', 'unstar', 'move', 'trash', 'restore', 'delete']);
+const MAX_BATCH_FILE_IDS = 1000;
 
 function sanitizeFileName(name) {
   if (!name) return 'unnamed_file';
   return name.replace(/[\/\?<>\\:\*\|":]/g, '_').replace(/\.\./g, '_').trim();
+}
+
+// --- Local filesystem safety -----------------------------------------------
+// isSafePath() from config/paths is a naive prefix check ("/uploads_evil" also
+// passes), so every local file access in this controller goes through a strict
+// containment test that additionally rejects symlink escapes.
+
+const LOCAL_ROOTS = [UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR, os.tmpdir()]
+  .filter(Boolean)
+  .map((root) => {
+    const resolved = path.resolve(root);
+    try {
+      return fs.realpathSync(resolved);
+    } catch (e) {
+      return resolved;
+    }
+  });
+const LOCAL_ROOTS_RESOLVED = [UPLOADS_DIR, CACHE_DIR, TEMP_UPLOAD_DIR, os.tmpdir()]
+  .filter(Boolean)
+  .map((root) => path.resolve(root));
+
+function isContainedInRoot(root, target) {
+  if (target === root) return true;
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  return target.startsWith(prefix);
+}
+
+function isSafeLocalPath(candidate) {
+  if (!candidate || typeof candidate !== 'string' || candidate.includes('\0')) return false;
+
+  let resolved;
+  try {
+    resolved = path.resolve(candidate);
+  } catch (e) {
+    return false;
+  }
+  if (!LOCAL_ROOTS_RESOLVED.some((root) => isContainedInRoot(root, resolved))) return false;
+
+  try {
+    const real = fs.realpathSync(resolved);
+    return LOCAL_ROOTS.some((root) => isContainedInRoot(root, real));
+  } catch (e) {
+    // Target does not exist yet: the resolved-path check above is enough.
+    return true;
+  }
+}
+
+function safeUnlink(candidate) {
+  if (!isSafeLocalPath(candidate)) return false;
+  try {
+    if (fs.existsSync(candidate)) {
+      fs.unlinkSync(candidate);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+/** Every Telegram message that belongs to a file record (primary id + all chunks). */
+function collectTelegramMessageIds(file) {
+  if (!file) return [];
+  const ids = new Set();
+  for (const id of normalizeMessageIds(file.telegram_chunk_ids)) ids.add(id);
+  const primary = normalizeMessageId(file.telegram_msg_id);
+  if (primary) ids.add(primary);
+  return Array.from(ids);
+}
+
+function scheduleTelegramDelete(file, excludeIds = []) {
+  const excluded = new Set(normalizeMessageIds(excludeIds));
+  const ids = collectTelegramMessageIds(file).filter((id) => !excluded.has(id));
+  if (ids.length === 0) return 0;
+  telegramService.deleteTelegramMessage(ids, file.telegram_chat_id || 'me').catch(() => {});
+  return ids.length;
+}
+
+function removeLocalArtifacts(file) {
+  const removed = [];
+  if (file && typeof file.local_path === 'string' && safeUnlink(file.local_path)) {
+    removed.push(file.local_path);
+  }
+  try {
+    if (typeof telegramService.removeLocalCache === 'function') {
+      const cached = telegramService.removeLocalCache(file);
+      if (cached) removed.push(cached);
+    }
+  } catch (e) {}
+  return removed;
+}
+
+/**
+ * RFC 7233 single-range parser.
+ *  - `ignore`         : no usable range (malformed / multi-range) -> answer 200
+ *  - `unsatisfiable`  : syntactically valid but outside the entity -> answer 416
+ *  - `range`          : inclusive start/end offsets
+ */
+function parseRangeHeader(rangeHeader, totalSize) {
+  if (typeof rangeHeader !== 'string' || !rangeHeader.trim()) return { kind: 'ignore' };
+
+  const header = rangeHeader.trim();
+  if (!/^bytes\s*=/i.test(header)) return { kind: 'ignore' };
+
+  const spec = header.slice(header.indexOf('=') + 1).trim();
+  if (!spec || spec.includes(',')) return { kind: 'ignore' }; // multipart/byteranges unsupported
+
+  const match = /^(\d*)-(\d*)$/.exec(spec);
+  if (!match) return { kind: 'ignore' };
+
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === '' && rawEnd === '') return { kind: 'ignore' };
+
+  const size = Number(totalSize);
+  if (!Number.isFinite(size) || size < 0) return { kind: 'ignore' };
+
+  let start;
+  let end;
+
+  if (rawStart === '') {
+    // Suffix range: bytes=-N (last N bytes)
+    const suffixLength = Number(rawEnd);
+    if (suffixLength === 0 || size === 0) return { kind: 'unsatisfiable', size };
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    if (rawEnd === '') {
+      end = size - 1;
+    } else {
+      end = Number(rawEnd);
+      if (end < start) return { kind: 'ignore' };
+      if (end > size - 1) end = size - 1;
+    }
+    if (size === 0 || start >= size) return { kind: 'unsatisfiable', size };
+  }
+
+  return { kind: 'range', start, end, size, length: end - start + 1 };
 }
 
 function validateMagicBytes(filePath, originalName) {
@@ -57,17 +198,27 @@ exports.listFiles = async (req, res) => {
       return res.json({ success: true, files: [] });
     }
 
-    // Auto-sync if file list is currently empty
-    if ((db.data.files || []).length === 0) {
+    // Auto-sync if file list is currently empty or requested
+    const shouldSync = (db.data.files || []).length === 0 || req.query?.sync === 'true';
+    if (shouldSync) {
       try {
         await telegramService.syncFromTelegramSavedMessages(activeSession);
       } catch (e) {
-        // Non-blocking
+        console.warn('[Files] Auto-sync notice:', e.message);
       }
     }
 
     const { folder_id, category, filter, search, sortBy, sortOrder } = req.query;
-    const files = await db.getFiles({
+    if (filter !== undefined && !ALLOWED_FILE_FILTERS.has(String(filter))) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid filter "${filter}". Allowed values: ${Array.from(ALLOWED_FILE_FILTERS).join(', ')}.`,
+      });
+    }
+
+    // folder_id is forwarded exactly as received: an absent parameter means
+    // "no folder filter", while 'root'/'' explicitly means the root folder.
+    let files = await db.getFiles({
       folder_id,
       category,
       filter: filter || 'all',
@@ -75,6 +226,10 @@ exports.listFiles = async (req, res) => {
       sortBy: sortBy || 'created_at',
       sortOrder: sortOrder || 'desc',
     });
+
+    // Enforce: ONLY real Telegram Saved Messages data (no local sandbox/dummy files)
+    files = files.filter((f) => f.storage_type === 'telegram' && f.telegram_msg_id);
+
     res.json({ success: true, files });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -95,13 +250,13 @@ exports.getFile = async (req, res) => {
 };
 
 exports.uploadFiles = async (req, res) => {
+  let requestCompleted = false;
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ success: false, error: 'No files uploaded.' });
     }
 
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    const { getSetting } = require('../db');
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
     const client = !isManualDisconnected ? await telegramService.ensureClient(clientSession) : null;
 
@@ -114,26 +269,28 @@ exports.uploadFiles = async (req, res) => {
     const targetFolderId = req.body.folder_id === 'root' || !req.body.folder_id ? null : req.body.folder_id;
     const uploadId = (req.body.upload_id || req.headers['x-upload-id'] || '').trim();
     const uploadedRecords = [];
+    const failures = [];
     let lastError = null;
 
     // Clean up temporary files if client abruptly closes or cancels connection
-    const cleanupTempFiles = () => {
+    const cleanupTempFiles = (reportError) => {
       if (req.files && Array.isArray(req.files)) {
         for (const file of req.files) {
-          if (file.path && fs.existsSync(file.path)) {
-            try { fs.unlinkSync(file.path); } catch (e) {}
-          }
+          if (file && file.path) safeUnlink(file.path);
         }
       }
-      if (uploadId) {
+      if (reportError && uploadId) {
         uploadTracker.error(uploadId, 'Upload connection aborted');
       }
     };
     req.on('close', () => {
-      if (uploadedRecords.length === 0) cleanupTempFiles();
+      // Leftover temp files are always removed; the tracker is only failed while
+      // the request is still in flight.
+      cleanupTempFiles(!requestCompleted);
     });
 
     for (const file of req.files) {
+      const displayName = sanitizeFileName(String(file.originalname || 'unnamed_file'));
       try {
         const rawName = Buffer.from(file.originalname, 'latin1').toString('utf8');
         const originalName = sanitizeFileName(rawName);
@@ -145,20 +302,22 @@ exports.uploadFiles = async (req, res) => {
         if (!validateMagicBytes(file.path, originalName)) {
           console.warn(`[Security Alert] Rejected file upload with mismatched executable signature: ${originalName}`);
           lastError = `Security Alert: Rejected ${originalName} with mismatched executable signature.`;
+          failures.push({ name: originalName, error: lastError, code: 'rejected' });
           if (uploadId) uploadTracker.error(uploadId, lastError);
           continue;
         }
 
         const mimeType = file.mimetype || mime.lookup(originalName) || 'application/octet-stream';
         const category = detectCategory(mimeType, originalName);
+        const size = Number.isFinite(Number(file.size)) ? Math.max(0, Number(file.size)) : 0;
 
-        // Upload to Telegram or Local
+        // Upload to Telegram (no local storage fallback)
         const uploadResult = await telegramService.uploadFile({
           originalName,
           buffer: file.buffer,
           filePath: file.path,
           mimeType,
-          size: file.size,
+          size,
           sessionString: clientSession,
           onProgress: (ratio) => {
             if (uploadId) {
@@ -177,7 +336,7 @@ exports.uploadFiles = async (req, res) => {
           name: originalName,
           original_name: originalName,
           mime_type: mimeType,
-          size: file.size,
+          size,
           category,
           telegram_msg_id: uploadResult.telegramMsgId,
           telegram_chunk_ids: uploadResult.telegramChunkIds || null,
@@ -185,8 +344,8 @@ exports.uploadFiles = async (req, res) => {
           total_parts: uploadResult.totalParts || 1,
           telegram_chat_id: uploadResult.telegramChatId,
           file_hash: uploadResult.fileHash || uploadResult.file_hash || null,
-          storage_type: uploadResult.storageType,
-          local_path: uploadResult.localPath,
+          storage_type: 'telegram',
+          local_path: null,
           tags: [],
           is_starred: 0,
         });
@@ -196,29 +355,43 @@ exports.uploadFiles = async (req, res) => {
           uploadTracker.complete(uploadId);
         }
       } catch (fileErr) {
-        console.error(`[FileController] Error processing file ${file.originalname}:`, fileErr.message);
+        console.error(`[FileController] Error processing file ${displayName}:`, fileErr.message);
         lastError = fileErr.message;
+        failures.push({ name: displayName, error: fileErr.message });
         if (uploadId) {
           uploadTracker.error(uploadId, fileErr.message);
         }
       } finally {
         // Always clean up temporary disk file from TEMP_UPLOAD_DIR
-        if (file.path && fs.existsSync(file.path)) {
-          try {
-            fs.unlinkSync(file.path);
-          } catch (e) {}
-        }
+        if (file.path) safeUnlink(file.path);
       }
     }
 
+    requestCompleted = true;
+
     if (uploadedRecords.length === 0) {
-      return res.status(500).json({ success: false, error: lastError || 'Failed to process any of the uploaded files.' });
+      return res.status(500).json({
+        success: false,
+        error: lastError || 'Failed to process any of the uploaded files.',
+        uploaded: 0,
+        failed: failures.length,
+        failures,
+      });
     }
 
-    res.status(201).json({
+    // Partial success must never look like a total success.
+    const partial = failures.length > 0;
+    return res.status(201).json({
       success: true,
-      message: `${uploadedRecords.length} file(s) uploaded successfully.`,
+      partial,
+      uploaded: uploadedRecords.length,
+      failed: failures.length,
+      requested: req.files.length,
+      message: partial
+        ? `${uploadedRecords.length} of ${req.files.length} file(s) uploaded. ${failures.length} failed.`
+        : `${uploadedRecords.length} file(s) uploaded successfully.`,
       files: uploadedRecords,
+      ...(partial ? { failures } : {}),
     });
   } catch (err) {
     console.error('[FileController] uploadFiles error:', err);
@@ -251,18 +424,28 @@ exports.downloadFile = async (req, res) => {
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
-    if (streamData.size) {
-      res.setHeader('Content-Length', streamData.size);
+    if (Number.isFinite(Number(streamData.size))) {
+      res.setHeader('Content-Length', String(Number(streamData.size)));
     }
 
     if (streamData.type === 'stream') {
+      streamData.stream.on('error', (err) => {
+        console.error('[FileController] download stream error:', err.message);
+        res.destroy(err);
+      });
       streamData.stream.pipe(res);
     } else if (streamData.type === 'buffer') {
       res.send(streamData.buffer);
+    } else {
+      res.status(500).end();
     }
   } catch (err) {
     console.error('[FileController] downloadFile error:', err);
-    res.status(500).json({ success: false, error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: err.message });
+    } else {
+      res.end();
+    }
   }
 };
 
@@ -320,6 +503,7 @@ exports.streamFile = async (req, res) => {
     const etag = `"${file.id}-${file.size}-${new Date(file.updated_at || file.created_at).getTime()}"`;
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.setHeader('Accept-Ranges', 'bytes');
 
     // Return 304 immediately if client already has cached version
     if (req.headers['if-none-match'] === etag) {
@@ -328,46 +512,54 @@ exports.streamFile = async (req, res) => {
 
     const streamData = await telegramService.getFileStream(file, clientSession);
 
-    // If streaming from local disk or cache path, support HTTP 206 Range requests for instant seeking & fast streaming
-    if (streamData.localPath && fs.existsSync(streamData.localPath) && isSafePath(streamData.localPath)) {
-      const stat = fs.statSync(streamData.localPath);
-      const fileSize = stat.size;
-      const range = req.headers.range;
+    const pipeFileStream = (stream) => {
+      stream.on('error', (err) => {
+        console.error('[FileController] streamFile stream error:', err.message);
+        res.destroy(err);
+      });
+      stream.pipe(res);
+    };
 
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunksize = end - start + 1;
-        const fileStream = fs.createReadStream(streamData.localPath, { start, end });
+    // Serve from a verified-safe local path with full HTTP 206 Range support
+    const localPath = streamData.localPath;
+    if (localPath && isSafeLocalPath(localPath) && fs.existsSync(localPath)) {
+      let stat;
+      try {
+        stat = fs.statSync(localPath);
+      } catch (e) {
+        stat = null;
+      }
 
-        const headers = {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunksize,
-          'Content-Type': file.mime_type || 'application/octet-stream',
-          'X-Content-Type-Options': 'nosniff',
-          'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
-          'ETag': etag,
-        };
-        if (isExecutableMime) headers['Content-Security-Policy'] = cspHeader;
+      if (stat && stat.isFile()) {
+        const fileSize = stat.size;
+        const range = parseRangeHeader(req.headers.range, fileSize);
 
-        res.writeHead(206, headers);
-        fileStream.pipe(res);
-        return;
-      } else {
-        const headers = {
-          'Content-Length': fileSize,
+        if (range.kind === 'unsatisfiable') {
+          res.setHeader('Content-Range', `bytes */${fileSize}`);
+          return res.status(416).end();
+        }
+
+        const baseHeaders = {
           'Content-Type': file.mime_type || 'application/octet-stream',
           'Accept-Ranges': 'bytes',
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
           'ETag': etag,
         };
-        if (isExecutableMime) headers['Content-Security-Policy'] = cspHeader;
+        if (isExecutableMime) baseHeaders['Content-Security-Policy'] = cspHeader;
 
-        res.writeHead(200, headers);
-        fs.createReadStream(streamData.localPath).pipe(res);
+        if (range.kind === 'range') {
+          res.writeHead(206, {
+            ...baseHeaders,
+            'Content-Range': `bytes ${range.start}-${range.end}/${fileSize}`,
+            'Content-Length': String(range.length),
+          });
+          pipeFileStream(fs.createReadStream(localPath, { start: range.start, end: range.end }));
+          return;
+        }
+
+        res.writeHead(200, { ...baseHeaders, 'Content-Length': String(fileSize) });
+        pipeFileStream(fs.createReadStream(localPath));
         return;
       }
     }
@@ -376,32 +568,69 @@ exports.streamFile = async (req, res) => {
     res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (streamData.size) {
-      res.setHeader('Content-Length', streamData.size);
+    if (Number.isFinite(Number(streamData.size))) {
+      res.setHeader('Content-Length', String(Number(streamData.size)));
     }
 
     if (streamData.type === 'buffer') {
       res.send(streamData.buffer);
     } else if (streamData.type === 'stream') {
-      streamData.stream.pipe(res);
+      pipeFileStream(streamData.stream);
+    } else {
+      res.status(500).end();
     }
   } catch (err) {
     console.error('[FileController] streamFile error:', err);
-    res.status(500).send(err.message);
+    if (!res.headersSent) {
+      res.status(500).send(err.message);
+    } else {
+      res.end();
+    }
   }
 };
 
 exports.updateFile = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, folder_id, is_starred, is_shared, tags } = req.body;
+    const { name, folder_id, is_starred, is_shared, tags } = req.body || {};
 
     const updates = {};
-    if (name !== undefined) updates.name = sanitizeFileName(name);
-    if (folder_id !== undefined) updates.folder_id = folder_id === 'root' ? null : folder_id;
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ success: false, error: 'File name must be a non-empty string.' });
+      }
+      updates.name = sanitizeFileName(name);
+    }
+
+    if (folder_id !== undefined) {
+      if (folder_id === null || folder_id === 'root' || folder_id === '') {
+        updates.folder_id = null;
+      } else if (typeof folder_id === 'string') {
+        const target = await db.getFolderById(folder_id);
+        if (!target) {
+          return res.status(400).json({ success: false, error: 'Target folder not found.' });
+        }
+        updates.folder_id = folder_id;
+      } else {
+        return res.status(400).json({ success: false, error: 'Invalid folder id.' });
+      }
+    }
+
     if (is_starred !== undefined) updates.is_starred = is_starred ? 1 : 0;
     if (is_shared !== undefined) updates.is_shared = is_shared ? 1 : 0;
-    if (tags !== undefined) updates.tags = tags;
+
+    if (tags !== undefined) {
+      const normalized = normalizeTags(tags);
+      if (normalized === null) {
+        return res.status(400).json({ success: false, error: 'Invalid tags: expected an array of strings.' });
+      }
+      updates.tags = normalized;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid fields to update.' });
+    }
 
     const updated = await db.updateFile(id, updates);
     if (!updated) {
@@ -418,6 +647,9 @@ exports.trashFile = async (req, res) => {
   try {
     const { id } = req.params;
     const file = await db.deleteFile(id, true);
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found.' });
+    }
     res.json({ success: true, message: 'File moved to trash.', file });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -428,6 +660,9 @@ exports.restoreFile = async (req, res) => {
   try {
     const { id } = req.params;
     const file = await db.restoreFile(id);
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found.' });
+    }
     res.json({ success: true, message: 'File restored.', file });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -441,23 +676,26 @@ exports.deleteFile = async (req, res) => {
 
     if (isPermanent) {
       const file = await db.getFileById(id);
-      if (file) {
-        if (file.telegram_chunk_ids || file.telegram_msg_id) {
-          telegramService.deleteTelegramMessage(file.telegram_chunk_ids || file.telegram_msg_id, file.telegram_chat_id).catch(() => {});
-        }
-        if (file.local_path && fs.existsSync(file.local_path) && isSafePath(file.local_path)) {
-          try {
-            fs.unlinkSync(file.local_path);
-          } catch (e) {}
-        }
-        await db.deleteFile(id, false);
+      if (!file) {
+        return res.status(404).json({ success: false, error: 'File not found.' });
       }
-      return res.json({ success: true, message: 'File deleted permanently.' });
+      // Every chunk message must be removed, not just the first one.
+      const deletedTelegramMessages = scheduleTelegramDelete(file);
+      removeLocalArtifacts(file);
+      await db.deleteFile(id, false);
+      return res.json({
+        success: true,
+        message: 'File deleted permanently.',
+        deletedTelegramMessages,
+      });
     }
 
     // Default: Safely move file to Recycle Bin
-    const file = await db.deleteFile(id, true);
-    res.json({ success: true, message: 'File moved to Recycle Bin.', file });
+    const trashed = await db.deleteFile(id, true);
+    if (!trashed) {
+      return res.status(404).json({ success: false, error: 'File not found.' });
+    }
+    res.json({ success: true, message: 'File moved to Recycle Bin.', file: trashed });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -466,17 +704,12 @@ exports.deleteFile = async (req, res) => {
 exports.emptyTrash = async (req, res) => {
   try {
     const result = await db.emptyTrash();
-    for (const f of result.trashedFiles) {
-      if (f.telegram_chunk_ids || f.telegram_msg_id) {
-        telegramService.deleteTelegramMessage(f.telegram_chunk_ids || f.telegram_msg_id, f.telegram_chat_id).catch(() => {});
-      }
-      if (f.local_path && fs.existsSync(f.local_path) && isSafePath(f.local_path)) {
-        try {
-          fs.unlinkSync(f.local_path);
-        } catch (e) {}
-      }
+    let deletedTelegramMessages = 0;
+    for (const f of result.trashedFiles || []) {
+      deletedTelegramMessages += scheduleTelegramDelete(f);
+      removeLocalArtifacts(f);
     }
-    res.json({ success: true, ...result });
+    res.json({ success: true, ...result, deletedTelegramMessages });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -484,46 +717,90 @@ exports.emptyTrash = async (req, res) => {
 
 exports.batchAction = async (req, res) => {
   try {
-    const { action, fileIds, targetFolderId } = req.body;
-    if (!fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
-      return res.status(400).json({ success: false, error: 'File IDs array is required.' });
+    const { action: rawAction, fileIds, targetFolderId } = req.body || {};
+    const action = String(rawAction || '').trim().toLowerCase();
+
+    if (!ALLOWED_BATCH_ACTIONS.has(action)) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported batch action "${rawAction === undefined ? '' : rawAction}". Supported actions: ${Array.from(ALLOWED_BATCH_ACTIONS).join(', ')}.`,
+      });
     }
 
-    const results = [];
-    for (const id of fileIds) {
-      if (action === 'star') {
-        const f = await db.updateFile(id, { is_starred: 1 });
-        results.push(f);
-      } else if (action === 'unstar') {
-        const f = await db.updateFile(id, { is_starred: 0 });
-        results.push(f);
-      } else if (action === 'move') {
-        const f = await db.updateFile(id, { folder_id: targetFolderId === 'root' ? null : targetFolderId });
-        results.push(f);
-      } else if (action === 'trash') {
-        const f = await db.deleteFile(id, true);
-        results.push(f);
-      } else if (action === 'restore') {
-        const f = await db.restoreFile(id);
-        results.push(f);
-      } else if (action === 'delete') {
-        const f = await db.getFileById(id);
-        if (f) {
-          if (f.telegram_msg_id) {
-            telegramService.deleteTelegramMessage(f.telegram_msg_id, f.telegram_chat_id).catch(() => {});
-          }
-          if (f.local_path && fs.existsSync(f.local_path) && isSafePath(f.local_path)) {
-            try {
-              fs.unlinkSync(f.local_path);
-            } catch (e) {}
-          }
-          await db.deleteFile(id, false);
-          results.push(f);
+    if (!Array.isArray(fileIds) || fileIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'File IDs array is required.' });
+    }
+    if (fileIds.length > MAX_BATCH_FILE_IDS) {
+      return res.status(400).json({ success: false, error: `Too many file ids (max ${MAX_BATCH_FILE_IDS}).` });
+    }
+    if (fileIds.some((id) => typeof id !== 'string' || !id)) {
+      return res.status(400).json({ success: false, error: 'File IDs must be non-empty strings.' });
+    }
+
+    let resolvedTargetFolder = null;
+    if (action === 'move') {
+      if (targetFolderId === null || targetFolderId === undefined || targetFolderId === 'root' || targetFolderId === '') {
+        resolvedTargetFolder = null;
+      } else if (typeof targetFolderId === 'string') {
+        const target = await db.getFolderById(targetFolderId);
+        if (!target) {
+          return res.status(400).json({ success: false, error: 'Target folder not found.' });
         }
+        resolvedTargetFolder = targetFolderId;
+      } else {
+        return res.status(400).json({ success: false, error: 'Invalid target folder id.' });
       }
     }
 
-    res.json({ success: true, count: results.length, results });
+    const results = [];
+    const errors = [];
+    let deletedTelegramMessages = 0;
+
+    for (const id of fileIds) {
+      try {
+        if (action === 'star') {
+          const f = await db.updateFile(id, { is_starred: 1 });
+          if (!f) throw new Error('File not found.');
+          results.push(f);
+        } else if (action === 'unstar') {
+          const f = await db.updateFile(id, { is_starred: 0 });
+          if (!f) throw new Error('File not found.');
+          results.push(f);
+        } else if (action === 'move') {
+          const f = await db.updateFile(id, { folder_id: resolvedTargetFolder });
+          if (!f) throw new Error('File not found.');
+          results.push(f);
+        } else if (action === 'trash') {
+          const f = await db.deleteFile(id, true);
+          if (!f) throw new Error('File not found.');
+          results.push(f);
+        } else if (action === 'restore') {
+          const f = await db.restoreFile(id);
+          if (!f) throw new Error('File not found.');
+          results.push(f);
+        } else if (action === 'delete') {
+          const f = await db.getFileById(id);
+          if (!f) throw new Error('File not found.');
+          deletedTelegramMessages += scheduleTelegramDelete(f);
+          removeLocalArtifacts(f);
+          await db.deleteFile(id, false);
+          results.push(f);
+        }
+      } catch (itemErr) {
+        errors.push({ id, error: itemErr.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      action,
+      count: results.length,
+      requested: fileIds.length,
+      failed: errors.length,
+      results,
+      ...(errors.length > 0 ? { errors } : {}),
+      ...(action === 'delete' ? { deletedTelegramMessages } : {}),
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -567,9 +844,12 @@ exports.getStats = async (req, res) => {
 
 exports.createNoteFile = async (req, res) => {
   try {
-    const { name, content = '', folder_id = null } = req.body;
+    const { name, content = '', folder_id = null } = req.body || {};
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: 'File name is required.' });
+    }
+    if (content !== null && content !== undefined && typeof content !== 'string') {
+      return res.status(400).json({ success: false, error: 'File content must be a string.' });
     }
 
     const originalName = sanitizeFileName(name.trim());
@@ -578,7 +858,6 @@ exports.createNoteFile = async (req, res) => {
     const targetFolderId = folder_id === 'root' || !folder_id ? null : folder_id;
 
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    const { getSetting } = require('../db');
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
     const client = !isManualDisconnected ? await telegramService.ensureClient(clientSession) : null;
 
@@ -589,8 +868,8 @@ exports.createNoteFile = async (req, res) => {
       });
     }
 
-    const buffer = Buffer.from(content, 'utf8');
-    const size = buffer.length;
+    const buffer = Buffer.from(content || '', 'utf8');
+    const size = buffer.length; // zero-byte notes are valid
 
     // Upload directly to Telegram Saved Messages
     const uploadResult = await telegramService.uploadFile({
@@ -613,8 +892,8 @@ exports.createNoteFile = async (req, res) => {
       is_chunked: uploadResult.isChunked || false,
       total_parts: uploadResult.totalParts || 1,
       telegram_chat_id: uploadResult.telegramChatId || 'me',
-      storage_type: uploadResult.storageType,
-      local_path: uploadResult.localPath,
+      storage_type: 'telegram',
+      local_path: null,
       tags: ['note', 'document'],
       is_starred: 0,
     });
@@ -633,13 +912,26 @@ exports.createNoteFile = async (req, res) => {
 exports.updateFileContent = async (req, res) => {
   try {
     const { id } = req.params;
-    const { content = '' } = req.body;
+    const { content } = req.body || {};
     const file = await db.getFileById(id);
     if (!file) {
       return res.status(404).json({ success: false, error: 'File not found.' });
     }
+    if (content !== null && content !== undefined && typeof content !== 'string') {
+      return res.status(400).json({ success: false, error: 'File content must be a string.' });
+    }
 
-    const buffer = Buffer.from(content, 'utf8');
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
+    const client = !isManualDisconnected ? await telegramService.ensureClient(clientSession) : null;
+    if (!client) {
+      return res.status(400).json({
+        success: false,
+        error: 'First connect Telegram! Please connect your Telegram account before updating files.',
+      });
+    }
+
+    const buffer = Buffer.from(content || '', 'utf8');
     const size = buffer.length;
 
     // Upload updated version to Telegram Saved Messages
@@ -648,12 +940,8 @@ exports.updateFileContent = async (req, res) => {
       buffer,
       mimeType: file.mime_type,
       size,
+      sessionString: clientSession,
     });
-
-    // Delete old Telegram message
-    if (file.telegram_chunk_ids || file.telegram_msg_id) {
-      telegramService.deleteTelegramMessage(file.telegram_chunk_ids || file.telegram_msg_id, file.telegram_chat_id).catch(() => {});
-    }
 
     const updated = await db.updateFile(id, {
       size,
@@ -661,8 +949,17 @@ exports.updateFileContent = async (req, res) => {
       telegram_chunk_ids: uploadResult.telegramChunkIds || null,
       is_chunked: uploadResult.isChunked || false,
       total_parts: uploadResult.totalParts || 1,
-      local_path: uploadResult.localPath,
+      local_path: null,
     });
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'File not found.' });
+    }
+
+    // The previous content is only dropped once the new record is persisted.
+    const newIds = [uploadResult.telegramMsgId, ...(uploadResult.telegramChunkIds || [])].filter(Boolean);
+    scheduleTelegramDelete(file, newIds);
+    removeLocalArtifacts(file);
 
     res.json({
       success: true,
@@ -700,4 +997,13 @@ exports.getSharedFileInfo = async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+};
+
+// Exported for focused unit tests of the parsing / safety helpers.
+exports.internalHelpers = {
+  parseRangeHeader,
+  isSafeLocalPath,
+  collectTelegramMessageIds,
+  normalizeTags,
+  sanitizeFileName,
 };

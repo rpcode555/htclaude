@@ -811,151 +811,109 @@ class TelegramService {
    */
   async uploadFile({ originalName, buffer, mimeType, size, filePath = null, sessionString = null, onProgress = null }) {
     await this.ensureClient(sessionString);
+    if (!this.client) {
+      throw new Error('Telegram client is not connected. Connect your Telegram account first.');
+    }
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const localCachedDest = path.join(CACHE_DIR, `${Date.now()}_${safeName}`);
     const MAX_TELEGRAM_SINGLE_FILE = 1900 * 1024 * 1024; // 1.9 GB safe ceiling for MTProto single document
 
-    // Pre-cache uploaded buffer or file for instant 0ms preview right after upload
-    if (filePath && fs.existsSync(filePath)) {
-      try {
-        fs.copyFileSync(filePath, localCachedDest);
-      } catch (e) {}
-    } else if (buffer) {
-      try {
-        fs.writeFileSync(localCachedDest, buffer);
-      } catch (e) {}
-    }
+    // Case A: File exceeds 1.9GB -> Automatic Multi-Part Chunking for Unlimited Size
+    if (size > MAX_TELEGRAM_SINGLE_FILE && filePath && fs.existsSync(filePath)) {
+      const totalParts = Math.ceil(size / MAX_TELEGRAM_SINGLE_FILE);
+      const chunkMsgIds = [];
+      console.log(`[Telegram Saved Messages] File ${originalName} (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds 1.9GB Telegram limit. Automatically chunking into ${totalParts} parts...`);
 
-    // 1. Saved Messages MTProto Upload (supports unlimited size via automatic chunking)
-    if (this.client) {
-      try {
-        // Case A: File exceeds 1.9GB -> Automatic Multi-Part Chunking for Unlimited Size
-        if (size > MAX_TELEGRAM_SINGLE_FILE && filePath && fs.existsSync(filePath)) {
-          const totalParts = Math.ceil(size / MAX_TELEGRAM_SINGLE_FILE);
-          const chunkMsgIds = [];
-          console.log(`[Telegram Saved Messages] File ${originalName} (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds 1.9GB Telegram limit. Automatically chunking into ${totalParts} parts...`);
+      for (let partIdx = 0; partIdx < totalParts; partIdx++) {
+        const start = partIdx * MAX_TELEGRAM_SINGLE_FILE;
+        const end = Math.min(size - 1, (partIdx + 1) * MAX_TELEGRAM_SINGLE_FILE - 1);
+        const partSize = end - start + 1;
+        const tempChunkPath = path.join(CACHE_DIR, `temp_chunk_${Date.now()}_${partIdx}_${safeName}`);
 
-          for (let partIdx = 0; partIdx < totalParts; partIdx++) {
-            const start = partIdx * MAX_TELEGRAM_SINGLE_FILE;
-            const end = Math.min(size - 1, (partIdx + 1) * MAX_TELEGRAM_SINGLE_FILE - 1);
-            const partSize = end - start + 1;
-            const tempChunkPath = path.join(CACHE_DIR, `temp_chunk_${Date.now()}_${partIdx}_${safeName}`);
+        // Stream slice chunk to disk to keep RAM usage minimal
+        await new Promise((resolve, reject) => {
+          const rs = fs.createReadStream(filePath, { start, end });
+          const ws = fs.createWriteStream(tempChunkPath);
+          rs.pipe(ws);
+          ws.on('finish', resolve);
+          ws.on('error', reject);
+        });
 
-            // Stream slice chunk to disk to keep RAM usage minimal
-            await new Promise((resolve, reject) => {
-              const rs = fs.createReadStream(filePath, { start, end });
-              const ws = fs.createWriteStream(tempChunkPath);
-              rs.pipe(ws);
-              ws.on('finish', resolve);
-              ws.on('error', reject);
-            });
-
-            const customFile = new CustomFile(
-              `${originalName}.part${String(partIdx + 1).padStart(3, '0')}`,
-              partSize,
-              tempChunkPath,
-              undefined
-            );
-
-            const result = await this.client.sendFile('me', {
-              file: customFile,
-              caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
-              forceDocument: true,
-              workers: 3,
-              progressCallback: (partProgress) => {
-                if (typeof onProgress === 'function') {
-                  const overallRatio = (partIdx + partProgress) / totalParts;
-                  onProgress(overallRatio);
-                }
-              },
-            });
-
-            chunkMsgIds.push(result.id);
-            console.log(`[Telegram Saved Messages] Uploaded chunk ${partIdx + 1}/${totalParts} (msg_id: ${result.id})`);
-
-            // Clean up temporary chunk file
-            try { fs.unlinkSync(tempChunkPath); } catch (e) {}
-          }
-
-          if (typeof onProgress === 'function') onProgress(1.0);
-
-          return {
-            storageType: 'telegram',
-            telegramMsgId: chunkMsgIds[0],
-            telegramChunkIds: chunkMsgIds,
-            telegramChatId: 'me',
-            isChunked: true,
-            totalParts,
-            localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
-            size: size,
-          };
-        }
-
-        // Case B: Single File Upload (< 1.9GB)
-        const fileContent = buffer || (filePath && fs.existsSync(filePath) && size < 10 * 1024 * 1024 ? fs.readFileSync(filePath) : undefined);
         const customFile = new CustomFile(
-          originalName,
-          size,
-          filePath || '',
-          fileContent
+          `${originalName}.part${String(partIdx + 1).padStart(3, '0')}`,
+          partSize,
+          tempChunkPath,
+          undefined
         );
 
         const result = await this.client.sendFile('me', {
           file: customFile,
-          caption: `📁 Hightech Claude: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
+          caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
           forceDocument: true,
           workers: 3,
-          progressCallback: (progress) => {
+          progressCallback: (partProgress) => {
             if (typeof onProgress === 'function') {
-              onProgress(progress);
+              const overallRatio = (partIdx + partProgress) / totalParts;
+              onProgress(overallRatio);
             }
           },
         });
 
-        if (typeof onProgress === 'function') onProgress(1.0);
+        chunkMsgIds.push(result.id);
+        console.log(`[Telegram Saved Messages] Uploaded chunk ${partIdx + 1}/${totalParts} (msg_id: ${result.id})`);
 
-        console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);
-        this.scheduleAutoBackup();
-
-        return {
-          storageType: 'telegram',
-          telegramMsgId: result.id,
-          telegramChunkIds: [result.id],
-          telegramChatId: 'me',
-          isChunked: false,
-          totalParts: 1,
-          localPath: fs.existsSync(localCachedDest) ? localCachedDest : null,
-          size: size,
-        };
-      } catch (err) {
-        console.error('[Telegram Saved Messages] MTProto upload failed:', err.message);
+        // Clean up temporary chunk file
+        try { fs.unlinkSync(tempChunkPath); } catch (e) {}
       }
+
+      if (typeof onProgress === 'function') onProgress(1.0);
+      this.scheduleAutoBackup();
+
+      return {
+        storageType: 'telegram',
+        telegramMsgId: chunkMsgIds[0],
+        telegramChunkIds: chunkMsgIds,
+        telegramChatId: 'me',
+        isChunked: true,
+        totalParts,
+        localPath: null,
+        size: size,
+      };
     }
 
-    // 2. Fallback: Local Storage (Sandbox mode when Telegram is disconnected)
-    const localFileName = `${Date.now()}_${safeName}`;
-    const localDest = path.join(UPLOADS_DIR, localFileName);
+    // Case B: Single File Upload (< 1.9GB)
+    const fileContent = buffer || (filePath && fs.existsSync(filePath) && size < 10 * 1024 * 1024 ? fs.readFileSync(filePath) : undefined);
+    const customFile = new CustomFile(
+      originalName,
+      size,
+      filePath || '',
+      fileContent
+    );
 
-    if (filePath && fs.existsSync(filePath)) {
-      try {
-        fs.copyFileSync(filePath, localDest);
-      } catch (e) {
-        console.error('[Storage] Error copying to local uploads:', e.message);
-      }
-    } else if (buffer) {
-      try {
-        fs.writeFileSync(localDest, buffer);
-      } catch (e) {
-        console.error('[Storage] Error writing buffer to local uploads:', e.message);
-      }
-    }
+    const result = await this.client.sendFile('me', {
+      file: customFile,
+      caption: `📁 Hightech Claude: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
+      forceDocument: true,
+      workers: 3,
+      progressCallback: (progress) => {
+        if (typeof onProgress === 'function') {
+          onProgress(progress);
+        }
+      },
+    });
+
+    if (typeof onProgress === 'function') onProgress(1.0);
+
+    console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);
+    this.scheduleAutoBackup();
 
     return {
-      storageType: 'local',
-      localPath: localDest,
-      telegramMsgId: null,
-      telegramChunkIds: null,
-      telegramChatId: null,
+      storageType: 'telegram',
+      telegramMsgId: result.id,
+      telegramChunkIds: [result.id],
+      telegramChatId: 'me',
+      isChunked: false,
+      totalParts: 1,
+      localPath: null,
       size: size,
     };
   }
@@ -965,53 +923,16 @@ class TelegramService {
    */
   async getFileStream(fileRecord, explicitSession = null) {
     await this.ensureClient(explicitSession);
-    const safeName = (fileRecord.name || fileRecord.original_name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
-    const cacheKey = fileRecord.telegram_msg_id || fileRecord.id;
-    const cacheFilePath = path.join(CACHE_DIR, `${fileRecord.id}_${cacheKey}_${safeName}`);
-
-    // 0. High-Speed Local Cache Hit (0ms - Instant disk stream)
-    if (fs.existsSync(cacheFilePath)) {
-      try {
-        const stat = fs.statSync(cacheFilePath);
-        if (stat.size > 0 && (!fileRecord.size || stat.size === fileRecord.size)) {
-          return {
-            type: 'stream',
-            stream: fs.createReadStream(cacheFilePath),
-            size: stat.size,
-            mimeType: fileRecord.mime_type,
-            localPath: cacheFilePath,
-          };
-        }
-      } catch (e) {}
-    }
-
-    // 1. If local_path exists and is valid on disk within safe directories
-    if (fileRecord.local_path && fs.existsSync(fileRecord.local_path) && isSafePath(fileRecord.local_path)) {
-      try {
-        const stat = fs.statSync(fileRecord.local_path);
-        if (stat.size > 0) {
-          return {
-            type: 'stream',
-            stream: fs.createReadStream(fileRecord.local_path),
-            size: fileRecord.size,
-            mimeType: fileRecord.mime_type,
-            localPath: fileRecord.local_path,
-          };
-        }
-      } catch (e) {}
-    }
-
-    // 2. Telegram Saved Messages (MTProto) Download & Chunk Assembly
     const chunkIds = Array.isArray(fileRecord.telegram_chunk_ids) && fileRecord.telegram_chunk_ids.length > 0
       ? fileRecord.telegram_chunk_ids
       : (fileRecord.telegram_msg_id ? [fileRecord.telegram_msg_id] : []);
 
     if (fileRecord.storage_type === 'telegram' && this.client && chunkIds.length > 0) {
       try {
-        // Multi-Part Chunk Reassembly
+        // Multi-Part Chunk Reassembly in memory
         if (chunkIds.length > 1) {
-          console.log(`[Telegram Saved Messages] Reassembling ${chunkIds.length} chunks for ${fileRecord.name}...`);
-          const writeStream = fs.createWriteStream(cacheFilePath);
+          console.log(`[Telegram Saved Messages] Reassembling ${chunkIds.length} chunks in memory for ${fileRecord.name}...`);
+          const chunkBuffers = [];
 
           for (let i = 0; i < chunkIds.length; i++) {
             const chunkMsgId = chunkIds[i];
@@ -1021,23 +942,20 @@ class TelegramService {
             if (messages && messages.length > 0 && messages[0].media) {
               const chunkBuf = await this.client.downloadMedia(messages[0].media, { workers: 8 });
               if (chunkBuf) {
-                await new Promise((resolve) => writeStream.write(chunkBuf, resolve));
+                chunkBuffers.push(chunkBuf);
               }
             }
           }
-          writeStream.end();
-          await new Promise((resolve) => writeStream.on('finish', resolve));
-
-          const stat = fs.statSync(cacheFilePath);
+          const fullBuffer = Buffer.concat(chunkBuffers);
           return {
-            type: 'stream',
-            stream: fs.createReadStream(cacheFilePath),
-            size: stat.size,
+            type: 'buffer',
+            buffer: fullBuffer,
+            size: fullBuffer.length,
             mimeType: fileRecord.mime_type,
-            localPath: cacheFilePath,
+            localPath: null,
           };
         } else {
-          // Single Document Download
+          // Single Document Download directly in memory
           const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
             ids: [chunkIds[0]],
           });
@@ -1048,17 +966,12 @@ class TelegramService {
             });
 
             if (buffer) {
-              // Asynchronously persist to fast local cache
-              fs.writeFile(cacheFilePath, buffer, (err) => {
-                if (err) console.error('[Cache] Failed to write cache:', err.message);
-              });
-
               return {
                 type: 'buffer',
                 buffer,
                 size: buffer.length,
                 mimeType: fileRecord.mime_type,
-                localPath: cacheFilePath,
+                localPath: null,
               };
             }
           }
@@ -1068,19 +981,7 @@ class TelegramService {
       }
     }
 
-    // 3. Fallback file in UPLOADS_DIR
-    const fallbackPath = path.join(UPLOADS_DIR, `${fileRecord.id}_${fileRecord.original_name}`);
-    if (fs.existsSync(fallbackPath)) {
-      return {
-        type: 'stream',
-        stream: fs.createReadStream(fallbackPath),
-        size: fileRecord.size,
-        mimeType: fileRecord.mime_type,
-        localPath: fallbackPath,
-      };
-    }
-
-    throw new Error('File could not be downloaded from Telegram Saved Messages or local cache.');
+    throw new Error('File could not be downloaded from Telegram Saved Messages.');
   }
 
   /**
@@ -1256,17 +1157,32 @@ class TelegramService {
       }
 
       // 2. Scan all media messages in Saved Messages to index any uploaded files
+      const realTelegramMsgMap = new Map();
+      for (const msg of messages) {
+        if (msg && msg.media) {
+          realTelegramMsgMap.set(msg.id, msg);
+        }
+      }
+
+      // Purge any files that do NOT exist in Telegram Saved Messages or are local files
+      db.data.files = (db.data.files || []).filter((f) => {
+        if (f.storage_type !== 'telegram' || !f.telegram_msg_id) return false;
+        if (Array.isArray(f.telegram_chunk_ids) && f.telegram_chunk_ids.length > 0) {
+          return f.telegram_chunk_ids.some((cid) => realTelegramMsgMap.has(cid));
+        }
+        return realTelegramMsgMap.has(f.telegram_msg_id);
+      });
+
       const existingMsgIds = new Set();
-      for (const f of (db.data.files || [])) {
+      for (const f of db.data.files) {
         if (f.telegram_msg_id) existingMsgIds.add(f.telegram_msg_id);
         if (Array.isArray(f.telegram_chunk_ids)) {
           f.telegram_chunk_ids.forEach((id) => existingMsgIds.add(id));
         }
       }
 
-      for (const msg of messages) {
-        if (!msg || !msg.media) continue;
-        if (existingMsgIds.has(msg.id)) continue;
+      for (const [msgId, msg] of realTelegramMsgMap.entries()) {
+        if (existingMsgIds.has(msgId)) continue;
 
         let fileName = '';
         let mimeType = 'application/octet-stream';
@@ -1333,6 +1249,7 @@ class TelegramService {
         newlyIndexedCount++;
       }
 
+      this._lastTelegramSync = Date.now();
       db.saveData();
       console.log(`[Telegram Sync] Complete. Total folders: ${db.data.folders.length}, Total files: ${db.data.files.length} (${newlyIndexedCount} newly indexed)`);
 

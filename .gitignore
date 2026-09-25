@@ -5,11 +5,13 @@ server/node_modules/
 
 # Environment Variables & Secrets
 .env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
 *.env
-*.env.local
-*.env.*.local
-server/.env
-client/.env
+*.env.*
+!*.env.example
 
 # Build outputs
 dist/

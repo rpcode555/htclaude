@@ -1,5 +1,11 @@
 // Utility helpers for formatting and file icons
 
+// Folders/files are flagged as trashed either with 1 (JSON DB) or true, so treat
+// both shapes as trashed before rendering or offering them as a move target.
+export function isTrashed(item) {
+  return item?.is_trash === 1 || item?.is_trash === true;
+}
+
 export function formatBytes(bytes, decimals = 2) {
   if (!bytes || bytes === 0) return '0 B';
   const k = 1024;

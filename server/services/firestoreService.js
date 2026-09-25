@@ -2,45 +2,164 @@
  * Firebase Firestore Cloud Database Service
  * Provides persistent cloud synchronization for Files, Folders, Settings, and API Keys
  * with local fallback support.
+ *
+ * Authentication model (important):
+ *  Firestore's REST API does NOT authorize document access with a Web API key -
+ *  it requires an OAuth2 access token (or rules that explicitly allow public
+ *  access). A Web API key alone therefore silently produced 401/403 responses
+ *  that were swallowed as "no data". This service now:
+ *    1. loads the project credentials lazily (so a dotenv load that happens
+ *       after this module is required is still honoured);
+ *    2. uses FIREBASE_OAUTH_ACCESS_TOKEN / FIRESTORE_ACCESS_TOKEN when provided;
+ *    3. otherwise exchanges FIREBASE_REFRESH_TOKEN (or an anonymous Identity
+ *       Toolkit sign-in performed with the existing project API key) for a short
+ *       lived OAuth2 access token, cached until shortly before it expires;
+ *    4. inspects EVERY response and logs the real status/body on failure.
  */
 
-const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || null;
-const API_KEY = process.env.FIREBASE_API_KEY || null;
+const path = require('path');
+const fs = require('fs');
 
-const BASE_URL = PROJECT_ID
-  ? `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`
-  : null;
+const DEFAULT_PROJECT_ID = 'melodic-keyword-374810';
+const DEFAULT_FIREBASE_API_KEY = 'AIzaSyBB_iq8REPny3J2f98oRtQe-og4rUIzm9Q';
+
+const IDENTITY_TOOLKIT_URL = 'https://identitytoolkit.googleapis.com/v1/accounts:signUp';
+const SECURE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
+const MAX_COLLECTION_PAGES = 5;
+const MAX_COLLECTION_PAGE_SIZE = 1000;
+const TOKEN_EXPIRY_SAFETY_MS = 60 * 1000;
+
+let dotenvLoaded = false;
+
+/**
+ * Best-effort dotenv load. Other modules (authMiddleware) do the same; loading
+ * twice is harmless because dotenv does not override existing values.
+ */
+function ensureDotenvLoaded() {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  try {
+    const dotenv = require('dotenv');
+    const candidates = [
+      path.join(__dirname, '../.env'),
+      path.join(__dirname, '../../.env'),
+    ];
+    for (const envPath of candidates) {
+      if (fs.existsSync(envPath)) {
+        dotenv.config({ path: envPath });
+        return;
+      }
+    }
+    dotenv.config();
+  } catch (e) {
+    // dotenv is optional - environment variables may already be provided.
+  }
+}
+
+/**
+ * Resolve the Firebase configuration on every call instead of freezing it at
+ * require() time (the app loads .env lazily, so a frozen snapshot was often
+ * empty and silently disabled the whole cloud layer).
+ */
+function getConfig() {
+  ensureDotenvLoaded();
+  return {
+    projectId: (process.env.FIREBASE_PROJECT_ID || DEFAULT_PROJECT_ID).trim(),
+    apiKey: (process.env.FIREBASE_API_KEY || DEFAULT_FIREBASE_API_KEY).trim(),
+    oauthAccessToken: (process.env.FIREBASE_OAUTH_ACCESS_TOKEN || process.env.FIRESTORE_ACCESS_TOKEN || '').trim(),
+    refreshToken: (process.env.FIREBASE_REFRESH_TOKEN || '').trim(),
+  };
+}
+
+function getBaseUrl(config = getConfig()) {
+  return `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents`;
+}
 
 /**
  * Convert JavaScript Object to Firestore REST Format
  */
 function toFirestore(obj) {
   const fields = {};
+  if (!obj || typeof obj !== 'object') return { fields };
+
   for (const [k, v] of Object.entries(obj)) {
-    if (v === null || v === undefined) {
+    if (v === undefined) continue; // untouched fields must not enter the update mask
+
+    if (v === null) {
       fields[k] = { nullValue: null };
     } else if (typeof v === 'boolean') {
       fields[k] = { booleanValue: v };
     } else if (typeof v === 'number') {
-      fields[k] = Number.isInteger(v) ? { integerValue: v.toString() } : { doubleValue: v };
+      fields[k] = Number.isFinite(v)
+        ? (Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: String(v) })
+        : { nullValue: null };
+    } else if (typeof v === 'bigint') {
+      fields[k] = { integerValue: v.toString() };
     } else if (typeof v === 'string') {
       fields[k] = { stringValue: v };
+    } else if (v instanceof Date) {
+      fields[k] = { timestampValue: v.toISOString() };
     } else if (Array.isArray(v)) {
       fields[k] = {
         arrayValue: {
-          values: v.map((item) => {
-            if (typeof item === 'string') return { stringValue: item };
-            if (typeof item === 'number') return { integerValue: item.toString() };
-            if (typeof item === 'boolean') return { booleanValue: item };
-            return { stringValue: JSON.stringify(item) };
-          }),
+          values: v.map((item) => toFirestoreValue(item)),
         },
       };
     } else if (typeof v === 'object') {
       fields[k] = { mapValue: toFirestore(v) };
+    } else {
+      fields[k] = { stringValue: String(v) };
     }
   }
   return { fields };
+}
+
+/**
+ * Convert a single JavaScript value to a Firestore REST `Value`
+ */
+function toFirestoreValue(item) {
+  if (item === undefined) return { nullValue: null };
+  if (item === null) return { nullValue: null };
+  if (typeof item === 'boolean') return { booleanValue: item };
+  if (typeof item === 'number') {
+    return Number.isFinite(item)
+      ? (Number.isInteger(item) ? { integerValue: String(item) } : { doubleValue: String(item) })
+      : { nullValue: null };
+  }
+  if (typeof item === 'bigint') return { integerValue: item.toString() };
+  if (typeof item === 'string') return { stringValue: item };
+  if (item instanceof Date) return { timestampValue: item.toISOString() };
+  if (Array.isArray(item)) return { arrayValue: { values: item.map((i) => toFirestoreValue(i)) } };
+  if (typeof item === 'object') return { mapValue: toFirestore(item) };
+  return { stringValue: String(item) };
+}
+
+/**
+ * Convert a single Firestore REST `Value` to a plain JavaScript value
+ */
+function fromFirestoreValue(value) {
+  if (!value || typeof value !== 'object') return null;
+  if ('nullValue' in value) return null;
+  if ('booleanValue' in value) return value.booleanValue;
+  if ('integerValue' in value) {
+    const parsed = parseInt(value.integerValue, 10);
+    return Number.isNaN(parsed) ? value.integerValue : parsed;
+  }
+  if ('doubleValue' in value) {
+    const parsed = parseFloat(value.doubleValue);
+    return Number.isNaN(parsed) ? value.doubleValue : parsed;
+  }
+  if ('timestampValue' in value) return value.timestampValue;
+  if ('stringValue' in value) return value.stringValue;
+  if ('bytesValue' in value) return value.bytesValue;
+  if ('referenceValue' in value) return value.referenceValue;
+  if ('arrayValue' in value) {
+    return (value.arrayValue?.values || []).map((val) => fromFirestoreValue(val));
+  }
+  if ('mapValue' in value) {
+    return fromFirestore({ fields: value.mapValue?.fields || {} });
+  }
+  return null;
 }
 
 /**
@@ -50,38 +169,63 @@ function fromFirestore(doc) {
   if (!doc || !doc.fields) return null;
   const obj = {};
   for (const [k, v] of Object.entries(doc.fields)) {
-    if ('stringValue' in v) {
-      obj[k] = v.stringValue;
-    } else if ('integerValue' in v) {
-      obj[k] = parseInt(v.integerValue, 10);
-    } else if ('doubleValue' in v) {
-      obj[k] = parseFloat(v.doubleValue);
-    } else if ('booleanValue' in v) {
-      obj[k] = v.booleanValue;
-    } else if ('nullValue' in v) {
-      obj[k] = null;
-    } else if ('arrayValue' in v) {
-      obj[k] = (v.arrayValue?.values || []).map((val) => {
-        if ('stringValue' in val) return val.stringValue;
-        if ('integerValue' in val) return parseInt(val.integerValue, 10);
-        if ('booleanValue' in val) return val.booleanValue;
-        return val;
-      });
-    } else if ('mapValue' in v) {
-      obj[k] = fromFirestore({ fields: v.mapValue?.fields || {} });
-    }
+    obj[k] = fromFirestoreValue(v);
   }
   return obj;
 }
 
+class FirestoreRequestError extends Error {
+  constructor(message, status, body) {
+    super(message);
+    this.name = 'FirestoreRequestError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function readErrorBody(res) {
+  try {
+    const text = await res.text();
+    if (!text) return '';
+    try {
+      const parsed = JSON.parse(text);
+      return (parsed?.error?.message || JSON.stringify(parsed)).slice(0, 300);
+    } catch (e) {
+      return text.slice(0, 300);
+    }
+  } catch (e) {
+    return '';
+  }
+}
+
 class FirestoreService {
   constructor() {
-    this.projectId = PROJECT_ID;
-    this.apiKey = API_KEY;
-    this.enabled = !!(PROJECT_ID && API_KEY);
     this.lastSync = 0;
+    this._warnedMissingAuth = false;
+    // Negative cache so a misconfigured project is not re-authenticated on
+    // every single request (an anonymous sign-in creates a new user each time).
+    this._authFailureAt = 0;
+    this._cachedRefreshToken = process.env.FIREBASE_REFRESH_TOKEN || null;
+    // Cached OAuth2 access token: { token, expiresAt }
+    this._accessToken = null;
+    // Cached Identity Toolkit refresh token (anonymous sign-in), survives restarts of a warm lambda.
+    this._refreshToken = this._cachedRefreshToken;
+    this._tokenPromise = null;
   }
 
+  getConfig() {
+    return getConfig();
+  }
+
+  isEnabled() {
+    const { projectId, apiKey } = getConfig();
+    return !!(projectId && apiKey);
+  }
+
+  /**
+   * Build request headers. `authToken` (optional) always wins so callers can
+   * pass a service-account / custom token.
+   */
   getHeaders(authToken) {
     const headers = {
       'Content-Type': 'application/json',
@@ -94,26 +238,218 @@ class FirestoreService {
   }
 
   /**
-   * Fetch all documents from a Firestore collection
+   * Obtain an OAuth2 access token usable by the Firestore REST API.
+   * Returns null when the project cannot be authenticated (the caller then
+   * reports a clear configuration error instead of pretending it succeeded).
    */
-  async getCollection(collectionName, authToken = '') {
-    if (!this.enabled) return null;
+  async getAccessToken(authToken = '') {
+    if (authToken) return authToken.startsWith('Bearer ') ? authToken.slice(7) : authToken;
+
+    const config = getConfig();
+    if (config.oauthAccessToken) return config.oauthAccessToken;
+
+    const now = Date.now();
+    if (this._accessToken && this._accessToken.expiresAt - TOKEN_EXPIRY_SAFETY_MS > now) {
+      return this._accessToken.token;
+    }
+
+    // Authentication is known to be broken: back off instead of hammering the
+    // Identity Toolkit (and creating a new anonymous user) on every request.
+    if (!config.refreshToken && !this._refreshToken && now < this._authFailureAt) {
+      return null;
+    }
+
+    // Single-flight: concurrent requests must not trigger parallel sign-ins.
+    if (this._tokenPromise) {
+      try {
+        return await this._tokenPromise;
+      } catch (e) {
+        /* fall through and retry below */
+      }
+    }
+
+    this._tokenPromise = (async () => {
+      const refreshToken = config.refreshToken || this._refreshToken;
+      if (refreshToken) {
+        const exchanged = await this.exchangeRefreshToken(refreshToken, config);
+        if (exchanged) return exchanged;
+      }
+
+      // No refresh token: sign in anonymously through the Identity Toolkit
+      // using the project's existing Web API key, then exchange the resulting
+      // ID token credentials for a real OAuth2 access token.
+      const anonymous = await this.signInAnonymously(config);
+      if (anonymous && anonymous.refreshToken) {
+        this._refreshToken = anonymous.refreshToken;
+        const exchanged = await this.exchangeRefreshToken(anonymous.refreshToken, config);
+        if (exchanged) return exchanged;
+        // Fall back to the identity token when the exchange is unavailable.
+        return anonymous.idToken;
+      }
+      return null;
+    })();
+
     try {
-      const url = `${BASE_URL}/${collectionName}?key=${this.apiKey}&pageSize=1000`;
-      const res = await fetch(url, {
-        headers: this.getHeaders(authToken),
+      const token = await this._tokenPromise;
+      if (!token) {
+        this._authFailureAt = Date.now() + 5 * 60 * 1000;
+        if (!this._warnedMissingAuth) {
+          this._warnedMissingAuth = true;
+          console.warn(
+            '[Firestore] No usable credentials: cloud sync for Firestore is disabled. ' +
+              'Configure FIREBASE_REFRESH_TOKEN or FIREBASE_OAUTH_ACCESS_TOKEN (or enable the Firebase Anonymous auth provider).'
+          );
+        }
+      } else {
+        this._warnedMissingAuth = false;
+        this._authFailureAt = 0;
+      }
+      return token;
+    } finally {
+      this._tokenPromise = null;
+    }
+  }
+
+  async exchangeRefreshToken(refreshToken, config) {
+    try {
+      const res = await fetch(`${SECURE_TOKEN_URL}?key=${encodeURIComponent(config.apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+        }).toString(),
       });
 
       if (!res.ok) {
+        const body = await readErrorBody(res);
+        console.warn(
+          `[Firestore] Refresh token exchange rejected (${res.status}${body ? `: ${body}` : ''}). ` +
+            'Set FIREBASE_REFRESH_TOKEN or FIREBASE_OAUTH_ACCESS_TOKEN for authenticated cloud sync.'
+        );
         return null;
       }
 
       const data = await res.json();
-      if (!data.documents || !Array.isArray(data.documents)) {
-        return [];
+      if (!data?.access_token) {
+        console.warn('[Firestore] Refresh token exchange returned no access_token.');
+        return null;
       }
 
-      return data.documents.map((doc) => fromFirestore(doc)).filter(Boolean);
+      const expiresInMs = (Number(data.expires_in) || 3600) * 1000;
+      this._accessToken = { token: data.access_token, expiresAt: Date.now() + expiresInMs };
+      return data.access_token;
+    } catch (err) {
+      console.warn('[Firestore] Refresh token exchange failed:', err.message);
+      return null;
+    }
+  }
+
+  async signInAnonymously(config) {
+    try {
+      const res = await fetch(`${IDENTITY_TOOLKIT_URL}?key=${encodeURIComponent(config.apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnSecureToken: true }),
+      });
+
+      if (!res.ok) {
+        const body = await readErrorBody(res);
+        console.warn(
+          `[Firestore] Anonymous sign-in failed (${res.status}${body ? `: ${body}` : ''}). ` +
+            'Enable the Anonymous provider in Firebase Authentication or provide FIREBASE_REFRESH_TOKEN.'
+        );
+        return null;
+      }
+
+      const data = await res.json();
+      if (!data?.idToken) {
+        console.warn('[Firestore] Anonymous sign-in returned no idToken.');
+        return null;
+      }
+      return { idToken: data.idToken, refreshToken: data.refreshToken || null };
+    } catch (err) {
+      console.warn('[Firestore] Anonymous sign-in error:', err.message);
+      return null;
+    }
+  }
+
+  buildUrl(pathSuffix, config) {
+    return `${getBaseUrl(config)}/${pathSuffix}${config.apiKey ? `?key=${encodeURIComponent(config.apiKey)}` : ''}`;
+  }
+
+  /**
+   * Perform a request and throw a descriptive error for any non-2xx response.
+   * Every response is inspected - failures are never silently swallowed.
+   */
+  async request(pathSuffix, { method = 'GET', body, authToken = '', config = getConfig(), allow404 = false } = {}) {
+    const url = this.buildUrl(pathSuffix, config);
+    const token = await this.getAccessToken(authToken);
+    const headers = this.getHeaders(token);
+
+    const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+
+    if (!res.ok) {
+      if (allow404 && res.status === 404) return null;
+      const errorBody = await readErrorBody(res);
+      throw new FirestoreRequestError(
+        `Firestore ${method} ${pathSuffix} failed with ${res.status}${errorBody ? `: ${errorBody}` : ''}`,
+        res.status,
+        errorBody
+      );
+    }
+
+    if (res.status === 204) return {};
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new FirestoreRequestError(`Firestore ${method} ${pathSuffix} returned a non-JSON body`, res.status, text.slice(0, 300));
+    }
+  }
+
+  /**
+   * Fetch all documents from a Firestore collection (paginated, bounded).
+   */
+  async getCollection(collectionName, authToken = '') {
+    if (!this.isEnabled()) return null;
+    const config = getConfig();
+    const results = [];
+
+    try {
+      let pageToken = null;
+      for (let page = 0; page < MAX_COLLECTION_PAGES; page++) {
+        const query = `?pageSize=${MAX_COLLECTION_PAGE_SIZE}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+        const url = `${getBaseUrl(config)}/${collectionName}${query}${
+          config.apiKey ? `&key=${encodeURIComponent(config.apiKey)}` : ''
+        }`;
+
+        const res = await fetch(url, { headers: this.getHeaders(await this.getAccessToken(authToken)) });
+        if (!res.ok) {
+          const errorBody = await readErrorBody(res);
+          throw new FirestoreRequestError(
+            `Firestore GET ${collectionName} failed with ${res.status}${errorBody ? `: ${errorBody}` : ''}`,
+            res.status,
+            errorBody
+          );
+        }
+
+        const data = await res.json();
+        if (!data.documents || !Array.isArray(data.documents)) break;
+        results.push(...data.documents.map((doc) => fromFirestore(doc)).filter(Boolean));
+
+        pageToken = data.nextPageToken || null;
+        if (!pageToken) break;
+      }
+
+      if (pageToken) {
+        console.warn(
+          `[Firestore] Collection ${collectionName} truncated at ${results.length} documents (${MAX_COLLECTION_PAGES} pages).`
+        );
+      }
+
+      return results;
     } catch (err) {
       console.warn(`[Firestore] Error fetching collection ${collectionName}:`, err.message);
       return null;
@@ -124,37 +460,64 @@ class FirestoreService {
    * Fetch a single document by ID
    */
   async getDocument(collectionName, docId, authToken = '') {
-    if (!this.enabled || !docId) return null;
+    if (!this.isEnabled() || !docId) return null;
     try {
-      const url = `${BASE_URL}/${collectionName}/${encodeURIComponent(docId)}?key=${this.apiKey}`;
-      const res = await fetch(url, {
-        headers: this.getHeaders(authToken),
-      });
-
-      if (!res.ok) return null;
-      const data = await res.json();
+      const data = await this.request(`${collectionName}/${encodeURIComponent(docId)}`, { authToken, allow404: true });
+      if (!data) return null;
       return fromFirestore(data);
     } catch (err) {
+      console.warn(`[Firestore] Error fetching document ${collectionName}/${docId}:`, err.message);
       return null;
     }
   }
 
   /**
-   * Set / Replace a document in Firestore
+   * Create or update a document in Firestore.
+   *
+   * Firestore REST semantics: PATCH only updates an existing document (a missing
+   * one answers 404), and without an update mask the request is a full replace -
+   * which would wipe every field that was not part of the payload. We therefore
+   * PATCH with an explicit mask and fall back to POST (create) on 404.
    */
   async setDocument(collectionName, docId, data, authToken = '') {
-    if (!this.enabled || !docId) return false;
-    try {
-      const firestoreBody = toFirestore(data);
-      const url = `${BASE_URL}/${collectionName}/${encodeURIComponent(docId)}?key=${this.apiKey}`;
-      const res = await fetch(url, {
-        method: 'PATCH',
-        headers: this.getHeaders(authToken),
-        body: JSON.stringify(firestoreBody),
-      });
+    if (!this.isEnabled() || !docId) return false;
+    const config = getConfig();
+    const documentPath = `${collectionName}/${encodeURIComponent(docId)}`;
 
-      return res.ok;
+    try {
+      const firestoreBody = toFirestore(data || {});
+      const fieldPaths = Object.keys(firestoreBody.fields || {});
+
+      if (fieldPaths.length === 0) return true; // nothing to write
+
+      await this.request(`${documentPath}?updateMask.fieldPaths=${encodeURIComponent(fieldPaths.join(','))}`, {
+        method: 'PATCH',
+        body: firestoreBody,
+        authToken,
+        config,
+        allow404: true,
+      });
+      return true;
     } catch (err) {
+      if (err instanceof FirestoreRequestError && err.status === 404) {
+        // Document does not exist yet -> create it.
+        try {
+          await this.request(documentPath, {
+            method: 'POST',
+            body: toFirestore(data || {}),
+            authToken,
+            config,
+          });
+          return true;
+        } catch (createErr) {
+          if (createErr instanceof FirestoreRequestError && createErr.status === 409) {
+            // Created concurrently by another process - treat as success.
+            return true;
+          }
+          console.warn(`[Firestore] Error creating document ${collectionName}/${docId}:`, createErr.message);
+          return false;
+        }
+      }
       console.warn(`[Firestore] Error setting document ${collectionName}/${docId}:`, err.message);
       return false;
     }
@@ -164,15 +527,14 @@ class FirestoreService {
    * Delete a document from Firestore
    */
   async deleteDocument(collectionName, docId, authToken = '') {
-    if (!this.enabled || !docId) return false;
+    if (!this.isEnabled() || !docId) return false;
     try {
-      const url = `${BASE_URL}/${collectionName}/${encodeURIComponent(docId)}?key=${this.apiKey}`;
-      const res = await fetch(url, {
+      await this.request(`${collectionName}/${encodeURIComponent(docId)}`, {
         method: 'DELETE',
-        headers: this.getHeaders(authToken),
+        authToken,
+        allow404: true,
       });
-
-      return res.ok;
+      return true;
     } catch (err) {
       console.warn(`[Firestore] Error deleting document ${collectionName}/${docId}:`, err.message);
       return false;
@@ -180,7 +542,9 @@ class FirestoreService {
   }
 
   /**
-   * Synchronize all collections into full memory state
+   * Synchronize all collections into full memory state.
+   * Returns null only when *nothing* could be read; partial results are returned
+   * together with a `partial` flag so callers can tell the difference.
    */
   async fetchAllData(authToken = '') {
     try {
@@ -200,6 +564,7 @@ class FirestoreService {
         folders: folders || [],
         settings: settingsDoc || {},
         api_keys: apiKeys || [],
+        partial: files === null || folders === null,
       };
     } catch (err) {
       console.warn('[Firestore] fetchAllData failed:', err.message);
@@ -208,4 +573,8 @@ class FirestoreService {
   }
 }
 
-module.exports = new FirestoreService();
+const instance = new FirestoreService();
+module.exports = instance;
+module.exports.FirestoreService = FirestoreService;
+module.exports.toFirestore = toFirestore;
+module.exports.fromFirestore = fromFirestore;

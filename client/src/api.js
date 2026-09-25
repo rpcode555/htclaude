@@ -1,8 +1,9 @@
 // API Service for Hightech Claude Storage with Automatic Bearer Token Authorization
 
 import { auth } from './firebase';
+import { API_BASE, apiUrl } from './apiConfig';
 
-const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
+export { API_BASE, apiUrl };
 
 async function getAuthHeader() {
   const headers = {};
@@ -326,7 +327,12 @@ export const api = {
   async getFiles({ folder_id, category, filter, search, sortBy, sortOrder } = {}) {
     const headers = await getAuthHeader();
     const params = new URLSearchParams();
-    if (folder_id !== undefined && folder_id !== null) params.append('folder_id', folder_id);
+    // `null` means the cloud root: send it explicitly, otherwise the backend
+    // receives no folder filter and lists every file of every folder at root
+    // level (making each file appear both at root and inside its folder).
+    if (folder_id !== undefined) {
+      params.append('folder_id', folder_id === null || folder_id === 'root' ? 'root' : folder_id);
+    }
     if (category) params.append('category', category);
     if (filter) params.append('filter', filter);
     if (search) params.append('search', search);
@@ -403,7 +409,7 @@ export const api = {
           }
           try {
             const authHeader = await getAuthHeader();
-            const res = await fetch(`${API_BASE}/files/upload-progress/${uploadId}`, {
+            const res = await fetch(apiUrl(`/files/upload-progress/${uploadId}`), {
               headers: { ...authHeader },
             });
             if (!res.ok) return;
@@ -526,44 +532,75 @@ export const api = {
     });
   },
 
-  async uploadFilesWithProgress(files, folder_id, onProgress, onFileComplete) {
-    const fileArray = Array.from(files);
+  /**
+   * Upload a batch of files one by one, reporting live progress per file.
+   * A failing file never aborts the rest of the batch: every failure is
+   * collected (and reported through `onFileError`) so partial results stay
+   * visible and retryable by the caller.
+   *
+   * @returns {{ success: boolean, total: number, uploaded: number, files: Array,
+   *             errors: Array<{ index: number, name: string, message: string }>,
+   *             error?: string }}
+   */
+  async uploadFilesWithProgress(files, folder_id, onProgress, onFileComplete, onFileError) {
+    const fileArray = Array.from(files || []);
     const totalFiles = fileArray.length;
     const allUploadedRecords = [];
+    const errors = [];
 
     for (let i = 0; i < totalFiles; i++) {
       const currentFile = fileArray[i];
-      const res = await this.uploadSingleFile(currentFile, folder_id, (fileProgress) => {
-        if (onProgress) {
-          const overallPercent = Math.round(((i + (fileProgress.percent / 100)) / totalFiles) * 100);
-          onProgress({
-            fileIndex: i,
-            totalFiles,
-            currentFileName: currentFile.name,
-            filePercent: fileProgress.percent,
-            percent: overallPercent,
-            cloudPercent: fileProgress.cloudPercent,
-            stage: fileProgress.stage,
-            stageText: fileProgress.stageText,
-            speed: fileProgress.speed,
-            timeRemaining: fileProgress.timeRemaining,
-            loaded: fileProgress.loaded,
-            total: fileProgress.total,
-          });
-        }
-      });
+      try {
+        const res = await this.uploadSingleFile(currentFile, folder_id, (fileProgress) => {
+          if (onProgress) {
+            const overallPercent = Math.round(((i + (fileProgress.percent / 100)) / totalFiles) * 100);
+            onProgress({
+              fileIndex: i,
+              totalFiles,
+              currentFileName: currentFile.name,
+              filePercent: fileProgress.percent,
+              percent: overallPercent,
+              cloudPercent: fileProgress.cloudPercent,
+              stage: fileProgress.stage,
+              stageText: fileProgress.stageText,
+              speed: fileProgress.speed,
+              timeRemaining: fileProgress.timeRemaining,
+              loaded: fileProgress.loaded,
+              total: fileProgress.total,
+            });
+          }
+        });
 
-      if (res && res.files && res.files.length > 0) {
-        allUploadedRecords.push(...res.files);
-        if (onFileComplete) {
-          onFileComplete(res.files, i);
+        const uploadedFiles = res && Array.isArray(res.files) ? res.files : [];
+        if (uploadedFiles.length > 0) {
+          allUploadedRecords.push(...uploadedFiles);
+          if (onFileComplete) {
+            onFileComplete(uploadedFiles, i);
+          }
+        } else {
+          // Request succeeded but nothing was stored for this file.
+          const message = (res && res.error) || 'Server did not return an uploaded file record.';
+          errors.push({ index: i, name: currentFile.name, message });
+          if (onFileError) onFileError(new Error(message), i, currentFile);
         }
+      } catch (err) {
+        const message = err?.message || 'Upload failed.';
+        console.error(`[api] Upload failed for "${currentFile.name}":`, message);
+        errors.push({ index: i, name: currentFile.name, message });
+        if (onFileError) onFileError(err instanceof Error ? err : new Error(message), i, currentFile);
       }
     }
 
     return {
-      success: true,
+      success: errors.length === 0,
+      total: totalFiles,
+      uploaded: allUploadedRecords.length,
       files: allUploadedRecords,
+      errors,
+      error:
+        errors.length > 0 && errors.length === totalFiles
+          ? errors[0].message
+          : undefined,
     };
   },
 
@@ -573,7 +610,7 @@ export const api = {
     if (tgSession) params.append('session', tgSession);
     if (token) params.append('token', token);
     const qs = params.toString();
-    return `${API_BASE}/files/${fileId}/download${qs ? `?${qs}` : ''}`;
+    return `${apiUrl(`/files/${fileId}/download`)}${qs ? `?${qs}` : ''}`;
   },
 
   getStreamUrl(fileId, token = null) {
@@ -582,7 +619,7 @@ export const api = {
     if (tgSession) params.append('session', tgSession);
     if (token) params.append('token', token);
     const qs = params.toString();
-    return `${API_BASE}/files/${fileId}/stream${qs ? `?${qs}` : ''}`;
+    return `${apiUrl(`/files/${fileId}/stream`)}${qs ? `?${qs}` : ''}`;
   },
 
   async updateFile(id, updates) {
