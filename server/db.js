@@ -741,6 +741,17 @@ class Database {
       }
     }
 
+    // A plain updateFolder({is_trash: 0}) must not resurrect a child that was
+    // trashed in a *different* operation than its (already restored) parent.
+    // db.restoreFolder() is the only path that may restore a whole subtree.
+    if (updates && updates.is_trash === 0 && folder.is_trash === 1) {
+      const parent = (this.data.folders || []).find((f) => f.id === (folder.parent_id || null));
+      const parentStamp = parent && !parent.is_trash ? parent.restored_from_stamp : null;
+      if (parentStamp && folder.trashed_at && folder.trashed_at !== parentStamp) {
+        return folder;
+      }
+    }
+
     const updated = this.normalizeFolderRecord({ ...folder, ...updates, id, updated_at: new Date().toISOString() });
     const index = (this.data.folders || []).findIndex((f) => f.id === id);
     this.data.folders[index] = updated;
@@ -786,18 +797,24 @@ class Database {
 
     folder.is_trash = 1;
     folder.trashed_at = stamp;
+    folder.restored_from_stamp = null;
     folder.updated_at = stamp;
     await cloudDbService.deleteFolder(id, false);
 
     for (const child of descendants) {
+      // Already-trashed children keep their own stamp: that is what lets a later
+      // restore of this folder leave them alone.
+      if (child.is_trash === 1) continue;
       child.is_trash = 1;
       child.trashed_at = stamp;
+      child.restored_from_stamp = null;
       child.updated_at = stamp;
       await cloudDbService.deleteFolder(child.id, false);
     }
 
     const affectedFiles = (this.data.files || []).filter((f) => affectedIdSet.has(f.folder_id));
     for (const file of affectedFiles) {
+      if (file.is_trash === 1) continue; // keep the original trash stamp
       file.is_trash = 1;
       file.trashed_at = stamp;
       file.updated_at = stamp;
@@ -821,6 +838,7 @@ class Database {
 
     folder.is_trash = 0;
     folder.trashed_at = null;
+    folder.restored_from_stamp = stamp;
     folder.updated_at = new Date().toISOString();
     const restoredFolder = this.normalizeFolderRecord(folder);
     const folderIndex = (this.data.folders || []).findIndex((f) => f.id === id);
@@ -833,6 +851,7 @@ class Database {
       if (stamp && child.trashed_at && child.trashed_at !== stamp) continue; // trashed separately
       child.is_trash = 0;
       child.trashed_at = null;
+      child.restored_from_stamp = stamp;
       child.updated_at = new Date().toISOString();
       affectedFolderIds.add(child.id);
       await cloudDbService.saveFolder(child);
