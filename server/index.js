@@ -21,20 +21,46 @@ const { apiLimiter } = require('./middleware/rateLimitMiddleware');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+let httpServer = null;
+let shuttingDown = false;
 
-// Handle transient GramJS socket reconnect timeouts and network fluctuations gracefully
-process.on('unhandledRejection', (reason) => {
-  const msg = reason?.message || String(reason || '');
-  if (msg.includes('TIMEOUT') || msg.includes('Not connected') || msg.includes('hanging states') || msg.includes('ECONNRESET')) return;
-  console.warn('[Server Warning] Unhandled Rejection:', msg);
+function terminateAfterFatalError(kind, error) {
+  console.error(`[Server Fatal] ${kind}:`, error);
+  process.exitCode = 1;
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  // Do not silently continue after an unknown exception: the process may be in
+  // an inconsistent state. Close the listener first, then terminate. The
+  // timeout prevents a stuck long-lived upload from blocking shutdown forever.
+  const forceExitTimer = setTimeout(() => process.exit(1), 5000);
+  forceExitTimer.unref?.();
+  const finishShutdown = () => {
+    clearTimeout(forceExitTimer);
+    process.exit(1);
+  };
+
+  if (httpServer) {
+    try {
+      httpServer.close(finishShutdown);
+      return;
+    } catch (error) {
+      console.error('[Server Fatal] Error while closing HTTP server:', error);
+    }
+  }
+
+  setImmediate(finishShutdown);
+}
+
+// Never swallow an uncaught exception or an unhandled rejection. Previously a
+// small set of Telegram/library messages were silently ignored, which could
+// leave the API serving requests after process state had already diverged.
+process.on('uncaughtException', (error) => {
+  terminateAfterFatalError('Uncaught Exception', error);
 });
 
-process.on('uncaughtException', (err) => {
-  const msg = err?.message || String(err || '');
-  if (msg.includes('TIMEOUT') || msg.includes('Not connected') || msg.includes('hanging states') || msg.includes('ECONNRESET')) {
-    return;
-  }
-  console.error('[Server Error] Uncaught Exception:', err);
+process.on('unhandledRejection', (reason) => {
+  terminateAfterFatalError('Unhandled Rejection', reason);
 });
 
 // Security Headers Middleware
@@ -83,19 +109,34 @@ app.use(
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-// Global Rate Limiting on API endpoints
-app.use('/api', apiLimiter, apiRoutes);
+const DIRECT_API_PREFIXES = ['/folders', '/files', '/auth', '/developer', '/stats', '/v1', '/config'];
+
+function matchesPathPrefix(pathname, prefix) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isDirectApiPath(pathname) {
+  return DIRECT_API_PREFIXES.some((prefix) => matchesPathPrefix(pathname, prefix));
+}
+
+function isApiPath(pathname) {
+  return matchesPathPrefix(pathname, '/api') || isDirectApiPath(pathname);
+}
+
+// Apply one API limiter to every supported API spelling. Previously only
+// /api was limited; /v1 and the direct-prefix fallbacks could be used to evade
+// the limit entirely.
+app.use((req, res, next) => {
+  if (isApiPath(req.path)) return apiLimiter(req, res, next);
+  return next();
+});
+
+app.use('/api', apiRoutes);
 
 // Support serverless environments where Vercel rewrite might strip /api prefix
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/favicon.ico') {
-    return next();
-  }
-  const apiPrefixes = ['/folders', '/files', '/auth', '/developer', '/stats', '/v1', '/config'];
-  if (apiPrefixes.some((prefix) => req.path.startsWith(prefix))) {
-    return apiRoutes(req, res, next);
-  }
-  next();
+  if (isDirectApiPath(req.path)) return apiRoutes(req, res, next);
+  return next();
 });
 
 // Health check
@@ -116,7 +157,7 @@ if (fs.existsSync(clientDistPath)) {
 
 // Fallback handler for SPA
 app.use((req, res) => {
-  if (req.path.startsWith('/api')) {
+  if (matchesPathPrefix(req.path, '/api')) {
     return res.status(404).json({ error: 'API endpoint not found' });
   }
   const indexHtml = path.join(clientDistPath, 'index.html');
@@ -138,7 +179,7 @@ app.use((req, res) => {
 
 // Start Server if run directly (Local development / dedicated server)
 if (require.main === module && !process.env.VERCEL) {
-  const server = app.listen(PORT, '0.0.0.0', async () => {
+  httpServer = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`=========================================`);
     console.log(`🔒 Hightech Claude Server: http://localhost:${PORT}`);
     console.log(`🛡️ Admin Whitelist: ${process.env.ADMIN_EMAIL || 'Not configured'}`);
@@ -151,10 +192,10 @@ if (require.main === module && !process.env.VERCEL) {
   });
 
   // Remove socket timeout for unlimited multi-GB file uploads/downloads
-  server.timeout = 0;
-  server.requestTimeout = 0;
-  server.keepAliveTimeout = 1200000; // 20 minutes
-  server.headersTimeout = 1205000;
+  httpServer.timeout = 0;
+  httpServer.requestTimeout = 0;
+  httpServer.keepAliveTimeout = 1200000; // 20 minutes
+  httpServer.headersTimeout = 1205000;
 }
 
 module.exports = app;

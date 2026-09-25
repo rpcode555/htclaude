@@ -1,14 +1,15 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { getSetting, setSetting, db, detectCategory } = require('../db');
+const { getSetting, setSetting, db, detectCategory, normalizeMessageId, normalizeMessageIds } = require('../db');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 const { NewMessage } = require('telegram/events');
 const QRCode = require('qrcode');
 
-const { UPLOADS_DIR, CACHE_DIR, DATA_DIR, isSafePath } = require('../config/paths');
+const { UPLOADS_DIR, CACHE_DIR, DATA_DIR } = require('../config/paths');
 
 try {
   if (!fs.existsSync(UPLOADS_DIR)) {
@@ -18,6 +19,68 @@ try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
   }
 } catch (e) {}
+
+// --- Local path safety ------------------------------------------------------
+// Every generated local path is built from sanitized components and verified to
+// stay inside the managed directories, so a hostile file name can never escape.
+
+const LOCAL_ROOTS_RESOLVED = [UPLOADS_DIR, CACHE_DIR, DATA_DIR, os.tmpdir()]
+  .filter(Boolean)
+  .map((root) => path.resolve(root));
+const LOCAL_ROOTS_REAL = LOCAL_ROOTS_RESOLVED.map((root) => {
+  try {
+    return fs.realpathSync(root);
+  } catch (e) {
+    return root;
+  }
+});
+
+function isContainedInRoot(root, target) {
+  if (target === root) return true;
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  return target.startsWith(prefix);
+}
+
+function isSafeLocalPath(candidate) {
+  if (!candidate || typeof candidate !== 'string' || candidate.includes('\0')) return false;
+  let resolved;
+  try {
+    resolved = path.resolve(candidate);
+  } catch (e) {
+    return false;
+  }
+  if (!LOCAL_ROOTS_RESOLVED.some((root) => isContainedInRoot(root, resolved))) return false;
+  try {
+    const real = fs.realpathSync(resolved);
+    return LOCAL_ROOTS_REAL.some((root) => isContainedInRoot(root, real));
+  } catch (e) {
+    return true; // not created yet
+  }
+}
+
+/** Sanitize one path component so it can never contain separators or traversal. */
+function safePathPart(value, fallback = 'file', maxLength = 120) {
+  const cleaned = String(value === undefined || value === null ? '' : value)
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/^\.+/, '_')
+    .slice(0, maxLength);
+  return cleaned || fallback;
+}
+
+function buildSafeLocalPath(rootDir, ...parts) {
+  const base = path.resolve(rootDir);
+  const target = path.resolve(base, ...parts.map((part, index) => safePathPart(part, index === 0 ? 'file' : `part${index}`)));
+  if (!isContainedInRoot(base, target) || !isSafeLocalPath(target)) {
+    return null;
+  }
+  return target;
+}
+
+const APP_CAPTION_MARKER = 'Hightech Claude';
+const BACKUP_FILE_PREFIX = 'telecloud_db_backup_';
+const DEFAULT_SYNC_WINDOW = 500;
+const FULL_SYNC_WINDOW = 20000;
+const MSG_ID_VERIFY_BATCH = 50;
 
 class TelegramService {
   constructor() {
@@ -32,6 +95,88 @@ class TelegramService {
     this._hasLoggedNoSession = false;
     this._cachedUserDetails = null;
     this._lastStatusCheck = 0;
+    this._activeSessionFingerprint = null;
+    this._listenerClient = null;
+    this._savedMessagesHandler = null;
+    this._lastTelegramSync = 0;
+  }
+
+  // --- Client lifecycle ----------------------------------------------------
+
+  _normalizeSession(session) {
+    return String(session || '').trim();
+  }
+
+  /**
+   * Stable fingerprint of a GramJS session string. Comparing fingerprints (and
+   * not raw strings) avoids rebuilding the client when the very same session is
+   * re-sent in a slightly different but equivalent form.
+   */
+  _sessionFingerprint(session) {
+    const raw = this._normalizeSession(session);
+    if (!raw) return null;
+    try {
+      const parsed = new StringSession(raw);
+      const key = parsed._key && parsed._key.length
+        ? parsed._key
+        : parsed.authKey && typeof parsed.authKey.getKey === 'function'
+          ? parsed.authKey.getKey()
+          : null;
+      if (key && key.length) {
+        return crypto.createHash('sha256').update(Buffer.concat([Buffer.from([parsed.dcId || 0]), Buffer.from(key)])).digest('hex');
+      }
+    } catch (e) {
+      // fall through to the raw-string fingerprint
+    }
+    return crypto.createHash('sha256').update(raw).digest('hex');
+  }
+
+  _currentClientFingerprint() {
+    if (!this.client) return null;
+    try {
+      const saved = typeof this.client.session?.save === 'function' ? this.client.session.save() : '';
+      return this._sessionFingerprint(saved) || this._activeSessionFingerprint;
+    } catch (e) {
+      return this._activeSessionFingerprint;
+    }
+  }
+
+  /** True when the running client is already using exactly this session. */
+  _clientMatchesSession(session) {
+    const raw = this._normalizeSession(session);
+    if (!raw) return true; // nothing explicit to compare
+    if (!this.client) return false;
+    const current = this._currentClientFingerprint();
+    if (!current) return true; // unknown -> do not churn the connection
+    return current === this._sessionFingerprint(raw);
+  }
+
+  _detachSavedMessagesListener() {
+    if (this._savedMessagesHandler && this._listenerClient) {
+      try {
+        this._listenerClient.removeEventHandler(this._savedMessagesHandler);
+      } catch (e) {}
+    }
+    this._savedMessagesHandler = null;
+    this._listenerClient = null;
+    this.listenerAttached = false;
+  }
+
+  /** Fully reset the active client (explicit session change / disconnect). */
+  async _teardownClient(reason = 'replaced') {
+    const client = this.client;
+    this._detachSavedMessagesListener();
+    if (client) {
+      try {
+        await client.disconnect();
+      } catch (e) {}
+    }
+    if (this.client === client) this.client = null;
+    this._activeSessionFingerprint = null;
+    this._cachedUserDetails = null;
+    this._lastStatusCheck = 0;
+    this._initPromise = null;
+    console.log(`[Telegram] Active client reset (${reason}).`);
   }
 
   /**
@@ -42,8 +187,7 @@ class TelegramService {
       const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
       if (isManualDisconnected) {
         if (this.client) {
-          try { await this.client.disconnect(); } catch (e) {}
-          this.client = null;
+          await this._teardownClient('manual disconnect');
         }
         this.authType = 'demo';
         return;
@@ -54,9 +198,15 @@ class TelegramService {
       const apiId = parseInt(await getSetting('api_id')) || 39504238;
       const apiHash = (await getSetting('api_hash')) || '39268a286a89e430e14728116cfe0680';
       const rawSession = explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
-      const sessionString = String(rawSession).trim();
+      const sessionString = this._normalizeSession(rawSession);
 
       if (apiId && apiHash && sessionString) {
+        // An explicit session that differs from the running client must always
+        // replace it - otherwise uploads keep going to the previous account.
+        if (this.client && !this._clientMatchesSession(explicitSession)) {
+          await this._teardownClient('explicit session change');
+        }
+
         // If client already exists and is authorized, keep it!
         if (this.client) {
           try {
@@ -65,12 +215,13 @@ class TelegramService {
             }
             const isAuth = await this.client.checkAuthorization();
             if (isAuth) {
+              this._activeSessionFingerprint = this._currentClientFingerprint() || this._sessionFingerprint(sessionString);
+              this.setupSavedMessagesListener();
               return;
             }
           } catch (e) {}
           // Session is disconnected or unauthorized; cleanly disconnect old client first
-          try { await this.client.disconnect(); } catch (e) {}
-          this.client = null;
+          await this._teardownClient('unauthorized session');
         }
 
         const stringSession = new StringSession(sessionString);
@@ -84,6 +235,9 @@ class TelegramService {
         if (isAuth) {
           this.client = client;
           this._hasLoggedNoSession = false;
+          this._cachedUserDetails = null;
+          this._activeSessionFingerprint = this._sessionFingerprint(sessionString);
+          this._detachSavedMessagesListener();
           const me = await this.client.getMe();
           if (me) {
             this._cachedUserDetails = {
@@ -103,6 +257,7 @@ class TelegramService {
           console.warn('[Telegram] Session string is invalid or expired.');
           try { await client.disconnect(); } catch (e) {}
           this.client = null;
+          this._activeSessionFingerprint = null;
         }
       } else {
         if (!this._hasLoggedNoSession) {
@@ -113,6 +268,7 @@ class TelegramService {
     } catch (err) {
       console.error('[Telegram] Init notice:', err.message);
       this.client = null;
+      this._activeSessionFingerprint = null;
     }
   }
 
@@ -122,20 +278,29 @@ class TelegramService {
   async ensureClient(explicitSession = null) {
     const isManualDisconnected = (await getSetting('manual_disconnect')) === true;
     if (isManualDisconnected) {
-      this.client = null;
+      if (this.client) {
+        await this._teardownClient('manual disconnect');
+      }
       this.authType = 'demo';
       return null;
     }
 
     // If no session is provided and no session is saved in settings, don't attempt init
-    const sessionString = String(explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const sessionString = this._normalizeSession(
+      explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || ''
+    );
     if (!sessionString) {
       if (this.client) {
-        try { await this.client.disconnect(); } catch (e) {}
-        this.client = null;
+        await this._teardownClient('no session available');
       }
       this.authType = 'demo';
       return null;
+    }
+
+    // An explicitly supplied session always wins over the running client.
+    if (this.client && explicitSession && !this._clientMatchesSession(explicitSession)) {
+      console.log('[Telegram] Requested session differs from the active one - replacing client.');
+      await this._teardownClient('explicit session change');
     }
 
     // If client is already connected and authorized, check if session is active
@@ -146,30 +311,38 @@ class TelegramService {
         }
         const isAuth = await this.client.checkAuthorization();
         if (isAuth) {
+          this._activeSessionFingerprint = this._currentClientFingerprint() || this._activeSessionFingerprint;
+          this.setupSavedMessagesListener();
           return this.client;
         }
         // If authorization failed, clean up old client
-        try { await this.client.disconnect(); } catch (e) {}
-        this.client = null;
+        await this._teardownClient('authorization failed');
       } catch (e) {
         console.warn('[Telegram] Reconnection check notice:', e.message);
       }
     }
 
-    if (this._initPromise) {
-      return this._initPromise;
+    if (!this._initPromise) {
+      this._initPromise = (async () => {
+        await this.init(explicitSession);
+        return this.client;
+      })();
     }
 
-    this._initPromise = (async () => {
-      await this.init(explicitSession);
-      return this.client;
-    })();
-
+    let client;
     try {
-      return await this._initPromise;
+      client = await this._initPromise;
     } finally {
       this._initPromise = null;
     }
+
+    // A concurrent init may have installed a different account: re-init once.
+    if (explicitSession && client && !this._clientMatchesSession(explicitSession)) {
+      await this._teardownClient('session mismatch after init');
+      return this.ensureClient(explicitSession);
+    }
+
+    return client || null;
   }
 
   /**
@@ -181,7 +354,7 @@ class TelegramService {
     if (isServerless) return;
 
     try {
-      this.client.addEventHandler(async (event) => {
+      this._savedMessagesHandler = async (event) => {
         try {
           const msg = event.message;
           if (!msg || !msg.media) return;
@@ -197,24 +370,42 @@ class TelegramService {
         } catch (err) {
           console.warn('[Telegram Saved Messages] Event handler notice:', err.message);
         }
-      }, new NewMessage({}));
+      };
+
+      this.client.addEventHandler(this._savedMessagesHandler, new NewMessage({}));
 
       this.listenerAttached = true;
+      this._listenerClient = this.client;
       console.log('[Telegram] Real-time listener active for Saved Messages');
     } catch (e) {
+      this._savedMessagesHandler = null;
+      this._listenerClient = null;
+      this.listenerAttached = false;
       console.warn('[Telegram] Could not attach real-time listener:', e.message);
     }
   }
 
-  /**
-   * Handle incoming media sent directly to Telegram Saved Messages
-   */
-  async handleSavedMessageMedia(msg) {
+  /** The app's own outgoing uploads are already indexed by the request handler. */
+  _isOwnOutgoingUpload(msg) {
+    if (!msg) return false;
+    const caption = String(msg.message || '');
+    if (!caption.includes(APP_CAPTION_MARKER)) return false;
+    return msg.out === true || msg.out === 1;
+  }
+
+  _isBackupMessage(msg) {
+    if (!msg) return false;
+    const fileName = this._extractFileMetadata(msg).fileName;
+    if (fileName && fileName.startsWith(BACKUP_FILE_PREFIX)) return true;
+    return String(msg.message || '').includes('DB Backup');
+  }
+
+  _extractFileMetadata(msg) {
     let fileName = '';
     let mimeType = 'application/octet-stream';
     let fileSize = 0;
 
-    if (msg.media.document) {
+    if (msg && msg.media && msg.media.document) {
       const doc = msg.media.document;
       fileSize = Number(doc.size) || 0;
       mimeType = doc.mimeType || 'application/octet-stream';
@@ -226,26 +417,68 @@ class TelegramService {
           }
         }
       }
-      if (!fileName) fileName = `document_${Date.now()}`;
-    } else if (msg.media.photo) {
-      fileName = `photo_${Date.now()}.jpg`;
+      if (!fileName) fileName = `document_${normalizeMessageId(msg.id) || Date.now()}`;
+    } else if (msg && msg.media && msg.media.photo) {
+      fileName = `photo_${normalizeMessageId(msg.id) || Date.now()}.jpg`;
       mimeType = 'image/jpeg';
       fileSize = 0;
     }
 
-    if (fileName) {
+    // Recover the user facing name from the caption the app writes on upload.
+    if (fileName && msg && msg.message && String(msg.message).includes(APP_CAPTION_MARKER)) {
+      const match = String(msg.message).match(/Hightech Claude(?: \[Part \d+\/\d+\])?: (.+?)(?: \([\d.]+ [KMGT]?B\))?$/m);
+      if (match && match[1]) fileName = match[1].trim();
+    }
+
+    return { fileName, mimeType, fileSize };
+  }
+
+  async _isMessageAlreadyIndexed(msgId) {
+    const id = normalizeMessageId(msgId);
+    if (id === null) return true;
+    try {
+      return !!(await db.getFileByTelegramMsgId(id));
+    } catch (e) {
+      // If the lookup fails we must not create a duplicate record.
+      return true;
+    }
+  }
+
+  /**
+   * Handle incoming media sent directly to Telegram Saved Messages
+   */
+  async handleSavedMessageMedia(msg) {
+    try {
+      if (!msg || !msg.media) return;
+      if (this._isOwnOutgoingUpload(msg)) return; // already indexed by the uploader
+      if (this._isBackupMessage(msg)) return; // DB snapshots are not files
+
+      const msgId = normalizeMessageId(msg.id);
+      if (msgId === null) return;
+      if (await this._isMessageAlreadyIndexed(msgId)) return;
+
+      const { fileName, mimeType, fileSize } = this._extractFileMetadata(msg);
+      if (!fileName) return;
+
       const category = detectCategory(mimeType, fileName);
-      await db.insertFile({
+      const record = await db.insertFile({
         name: fileName,
         original_name: fileName,
         mime_type: mimeType,
         size: fileSize,
         category,
-        telegram_msg_id: msg.id,
+        telegram_msg_id: msgId,
+        telegram_chunk_ids: [msgId],
+        is_chunked: false,
+        total_parts: 1,
         telegram_chat_id: 'me',
         storage_type: 'telegram',
+        local_path: null,
+        created_at: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
       });
-      console.log(`[Telegram Saved Messages] Indexed new media: ${fileName}`);
+      console.log(`[Telegram Saved Messages] Indexed new media: ${fileName} (msg_id: ${msgId}, record: ${record.id})`);
+    } catch (err) {
+      console.warn('[Telegram Saved Messages] Index media notice:', err.message);
     }
   }
 
@@ -270,13 +503,15 @@ class TelegramService {
       };
     }
 
-    const sessionString = String(explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '').trim();
+    const sessionString = this._normalizeSession(
+      explicitSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || ''
+    );
     const hasSession = !!sessionString;
     const now = Date.now();
 
     // Fast memory-cached response (TTL: 45 seconds) to avoid hammering Telegram DC with getMe() MTProto requests
     if (this.client && this._cachedUserDetails && (now - this._lastStatusCheck < 45000)) {
-      const activeSession = this.client?.session?.save?.() || sessionString;
+      const activeSession = (this.client?.session?.save?.() || sessionString);
       return {
         connected: true,
         authType: 'saved_messages',
@@ -423,9 +658,9 @@ class TelegramService {
       throw new Error('Telegram API Hash is missing. Please configure your API credentials.');
     }
 
-    const phoneNumber = (passedPhoneNumber || this.tempPhoneNumber || (await getSetting('phone_number')) || '').trim();
-    const phoneCodeHash = (passedPhoneCodeHash || this.tempPhoneCodeHash || (await getSetting('phone_code_hash')) || '').trim();
-    const tempAuthSession = (passedTempSession || (await getSetting('temp_auth_session')) || '').trim();
+    const phoneNumber = this._normalizeSession(passedPhoneNumber || this.tempPhoneNumber || (await getSetting('phone_number')));
+    const phoneCodeHash = this._normalizeSession(passedPhoneCodeHash || this.tempPhoneCodeHash || (await getSetting('phone_code_hash')));
+    const tempAuthSession = this._normalizeSession(passedTempSession || (await getSetting('temp_auth_session')));
 
     if (!phoneNumber) {
       throw new Error('Phone number is missing. Please click Back and request a new code.');
@@ -507,12 +742,20 @@ class TelegramService {
     await setSetting('temp_auth_session', '');
     await setSetting('phone_code_hash', '');
 
+    // The account is switching: drop the previous client and its listener first.
+    if (this.client && this.client !== client) {
+      await this._teardownClient('account changed');
+    }
+
     this.client = client;
     this.authType = 'saved_messages';
     this.tempClient = null;
     this.qrClient = null;
     this.tempPhoneCodeHash = null;
     this.tempPhoneNumber = null;
+    this._activeSessionFingerprint = this._sessionFingerprint(sessionString);
+    this._cachedUserDetails = null;
+    this._detachSavedMessagesListener();
     this.setupSavedMessagesListener();
 
     const me = await client.getMe();
@@ -702,10 +945,11 @@ class TelegramService {
       throw new Error('API ID, API Hash, and Session String are all required.');
     }
 
-    const targetSession = sessionString.trim();
+    const targetSession = this._normalizeSession(sessionString);
+    const targetFingerprint = this._sessionFingerprint(targetSession);
 
-    // Check if existing client is already connected and authorized with this exact session
-    if (this.client) {
+    // Reuse the client only when it is already authorized with THIS session.
+    if (this.client && this._clientMatchesSession(targetSession)) {
       try {
         if (!this.client.connected) {
           await this.client.connect();
@@ -720,9 +964,12 @@ class TelegramService {
               lastName: me.lastName || '',
               username: me.username || '',
               phone: me.phone || '',
+              isPremium: me.premium || false,
               target: 'Saved Messages (me)',
             };
             this._lastStatusCheck = Date.now();
+            this._activeSessionFingerprint = this._currentClientFingerprint() || targetFingerprint;
+            this.setupSavedMessagesListener();
             return {
               success: true,
               sessionString: this.client.session?.save?.() || targetSession,
@@ -731,12 +978,11 @@ class TelegramService {
           }
         }
       } catch (e) {}
+    }
 
-      // Cleanly disconnect old client before connecting new one
-      try {
-        await this.client.disconnect();
-      } catch (e) {}
-      this.client = null;
+    // Always start from a clean slate: the account may be different.
+    if (this.client) {
+      await this._teardownClient('session string connect');
     }
 
     const stringSession = new StringSession(targetSession);
@@ -761,18 +1007,32 @@ class TelegramService {
 
     this.client = client;
     this.authType = 'saved_messages';
+    this._activeSessionFingerprint = targetFingerprint;
+    this._cachedUserDetails = null;
+    this._detachSavedMessagesListener();
     this.setupSavedMessagesListener();
 
     const me = await client.getMe();
-    return {
-      success: true,
-      sessionString: targetSession,
-      user: {
+    if (me) {
+      this._cachedUserDetails = {
         id: me.id.toString(),
         firstName: me.firstName || '',
         lastName: me.lastName || '',
         username: me.username || '',
         phone: me.phone || '',
+        isPremium: me.premium || false,
+        target: 'Saved Messages (me)',
+      };
+      this._lastStatusCheck = Date.now();
+    }
+    return {
+      success: true,
+      sessionString: targetSession,
+      user: {
+        id: me.id.toString(),
+        firstName: me.firstName,
+        username: me.username,
+        phone: me.phone,
         target: 'Saved Messages (me)',
       },
     };
@@ -782,17 +1042,12 @@ class TelegramService {
    * Disconnect current session & revert to sandbox demo mode
    */
   async disconnect() {
-    if (this.client) {
-      try {
-        await this.client.disconnect();
-      } catch (e) {}
-      this.client = null;
-    }
+    await this._teardownClient('manual disconnect');
 
-    this.listenerAttached = false;
     this.authType = 'demo';
     this._cachedUserDetails = null;
     this._lastStatusCheck = 0;
+    this._hasLoggedNoSession = true;
 
     await setSetting('manual_disconnect', true);
     await setSetting('session_string', '');
@@ -806,63 +1061,96 @@ class TelegramService {
   }
 
   /**
-   * Upload file directly to Telegram Saved Messages ('me') or local sandbox.
+   * Upload file directly to Telegram Saved Messages ('me').
    * Supports UNLIMITED file sizes by automatically chunking files exceeding 1.9GB.
    */
-  async uploadFile({ originalName, buffer, mimeType, size, filePath = null, sessionString = null, onProgress = null }) {
+  async uploadFile({ originalName, buffer, filePath = null, sessionString = null, onProgress = null }) {
     await this.ensureClient(sessionString);
     if (!this.client) {
       throw new Error('Telegram client is not connected. Connect your Telegram account first.');
     }
-    const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+    const safeName = safePathPart(originalName, 'file');
     const MAX_TELEGRAM_SINGLE_FILE = 1900 * 1024 * 1024; // 1.9 GB safe ceiling for MTProto single document
+
+    const contentLength = buffer ? buffer.length : (Number(filePath && fs.existsSync(filePath) ? fs.statSync(filePath).size : 0) || 0);
+    const size = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : contentLength;
 
     // Case A: File exceeds 1.9GB -> Automatic Multi-Part Chunking for Unlimited Size
     if (size > MAX_TELEGRAM_SINGLE_FILE && filePath && fs.existsSync(filePath)) {
       const totalParts = Math.ceil(size / MAX_TELEGRAM_SINGLE_FILE);
       const chunkMsgIds = [];
+      const tempChunkPaths = [];
       console.log(`[Telegram Saved Messages] File ${originalName} (${(size / 1024 / 1024 / 1024).toFixed(2)} GB) exceeds 1.9GB Telegram limit. Automatically chunking into ${totalParts} parts...`);
 
-      for (let partIdx = 0; partIdx < totalParts; partIdx++) {
-        const start = partIdx * MAX_TELEGRAM_SINGLE_FILE;
-        const end = Math.min(size - 1, (partIdx + 1) * MAX_TELEGRAM_SINGLE_FILE - 1);
-        const partSize = end - start + 1;
-        const tempChunkPath = path.join(CACHE_DIR, `temp_chunk_${Date.now()}_${partIdx}_${safeName}`);
+      try {
+        for (let partIdx = 0; partIdx < totalParts; partIdx++) {
+          const start = partIdx * MAX_TELEGRAM_SINGLE_FILE;
+          const end = Math.min(size - 1, (partIdx + 1) * MAX_TELEGRAM_SINGLE_FILE - 1);
+          const partSize = end - start + 1;
+          const tempChunkPath = buildSafeLocalPath(
+            CACHE_DIR,
+            `temp_chunk_${Date.now()}_${partIdx}_${safeName}`
+          );
+          if (!tempChunkPath) {
+            throw new Error('Could not create a safe temporary chunk path.');
+          }
+          tempChunkPaths.push(tempChunkPath);
 
-        // Stream slice chunk to disk to keep RAM usage minimal
-        await new Promise((resolve, reject) => {
-          const rs = fs.createReadStream(filePath, { start, end });
-          const ws = fs.createWriteStream(tempChunkPath);
-          rs.pipe(ws);
-          ws.on('finish', resolve);
-          ws.on('error', reject);
-        });
+          // Stream slice chunk to disk to keep RAM usage minimal
+          await new Promise((resolve, reject) => {
+            const rs = fs.createReadStream(filePath, { start, end });
+            const ws = fs.createWriteStream(tempChunkPath);
+            let settled = false;
+            const fail = (err) => {
+              if (settled) return;
+              settled = true;
+              try { ws.destroy(); } catch (e) {}
+              try { rs.destroy(); } catch (e) {}
+              reject(err);
+            };
+            rs.on('error', fail);
+            ws.on('error', fail);
+            ws.on('finish', () => {
+              if (settled) return;
+              settled = true;
+              resolve();
+            });
+            rs.pipe(ws);
+          });
 
-        const customFile = new CustomFile(
-          `${originalName}.part${String(partIdx + 1).padStart(3, '0')}`,
-          partSize,
-          tempChunkPath,
-          undefined
-        );
+          const customFile = new CustomFile(
+            `${originalName}.part${String(partIdx + 1).padStart(3, '0')}`,
+            partSize,
+            tempChunkPath,
+            undefined
+          );
 
-        const result = await this.client.sendFile('me', {
-          file: customFile,
-          caption: `📁 Hightech Claude [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
-          forceDocument: true,
-          workers: 3,
-          progressCallback: (partProgress) => {
-            if (typeof onProgress === 'function') {
-              const overallRatio = (partIdx + partProgress) / totalParts;
-              onProgress(overallRatio);
-            }
-          },
-        });
+          const result = await this.client.sendFile('me', {
+            file: customFile,
+            caption: `📁 ${APP_CAPTION_MARKER} [Part ${partIdx + 1}/${totalParts}]: ${originalName}`,
+            forceDocument: true,
+            workers: 3,
+            progressCallback: (partProgress) => {
+              if (typeof onProgress === 'function') {
+                const overallRatio = (partIdx + partProgress) / totalParts;
+                onProgress(overallRatio);
+              }
+            },
+          });
 
-        chunkMsgIds.push(result.id);
-        console.log(`[Telegram Saved Messages] Uploaded chunk ${partIdx + 1}/${totalParts} (msg_id: ${result.id})`);
-
-        // Clean up temporary chunk file
-        try { fs.unlinkSync(tempChunkPath); } catch (e) {}
+          const msgId = normalizeMessageId(result && result.id);
+          if (msgId === null) {
+            throw new Error(`Telegram did not return a message id for chunk ${partIdx + 1}.`);
+          }
+          chunkMsgIds.push(msgId);
+          console.log(`[Telegram Saved Messages] Uploaded chunk ${partIdx + 1}/${totalParts} (msg_id: ${msgId})`);
+        }
+      } finally {
+        // Temporary chunk slices must never be left behind on disk.
+        for (const tempPath of tempChunkPaths) {
+          try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (e) {}
+        }
       }
 
       if (typeof onProgress === 'function') onProgress(1.0);
@@ -891,7 +1179,7 @@ class TelegramService {
 
     const result = await this.client.sendFile('me', {
       file: customFile,
-      caption: `📁 Hightech Claude: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
+      caption: `📁 ${APP_CAPTION_MARKER}: ${originalName} (${(size / 1024 / 1024).toFixed(2)} MB)`,
       forceDocument: true,
       workers: 3,
       progressCallback: (progress) => {
@@ -901,15 +1189,20 @@ class TelegramService {
       },
     });
 
+    const msgId = normalizeMessageId(result && result.id);
+    if (msgId === null) {
+      throw new Error('Telegram did not return a message id for the upload.');
+    }
+
     if (typeof onProgress === 'function') onProgress(1.0);
 
-    console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${result.id})`);
+    console.log(`[Telegram Saved Messages] Uploaded ${originalName} (${size} bytes, msg_id: ${msgId})`);
     this.scheduleAutoBackup();
 
     return {
       storageType: 'telegram',
-      telegramMsgId: result.id,
-      telegramChunkIds: [result.id],
+      telegramMsgId: msgId,
+      telegramChunkIds: [msgId],
       telegramChatId: 'me',
       isChunked: false,
       totalParts: 1,
@@ -918,102 +1211,262 @@ class TelegramService {
     };
   }
 
+  // --- Local cache helpers -------------------------------------------------
+
+  /** Safe, generated cache location for a file record (never derived from raw names). */
+  getCachePathForRecord(fileRecord) {
+    if (!fileRecord) return null;
+    const idPart = safePathPart(fileRecord.id, 'file');
+    const msgPart = safePathPart(normalizeMessageId(fileRecord.telegram_msg_id) || 'nomsg', 'nomsg', 32);
+    const namePart = safePathPart(fileRecord.name || fileRecord.original_name || 'file', 'file', 80);
+    return buildSafeLocalPath(CACHE_DIR, `${idPart}_${msgPart}_${namePart}`);
+  }
+
+  /** Remove the cached copy of a file (used when its content is replaced or deleted). */
+  removeLocalCache(fileRecord) {
+    const cachePath = this.getCachePathForRecord(fileRecord);
+    if (!cachePath || !isSafeLocalPath(cachePath)) return null;
+    try {
+      if (fs.existsSync(cachePath)) {
+        fs.unlinkSync(cachePath);
+        return cachePath;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  _legacyUploadsPathForRecord(fileRecord) {
+    if (!fileRecord) return null;
+    return buildSafeLocalPath(UPLOADS_DIR, `${fileRecord.id}_${fileRecord.original_name || fileRecord.name || 'file'}`);
+  }
+
   /**
    * Download / Stream a file from Telegram Saved Messages with multi-part chunk reconstruction and local cache
    */
   async getFileStream(fileRecord, explicitSession = null) {
+    if (!fileRecord) {
+      throw new Error('No file record provided.');
+    }
+
     await this.ensureClient(explicitSession);
+
+    const cacheFilePath = this.getCachePathForRecord(fileRecord);
+    const expectedSize = Number(fileRecord.size) || 0;
+
+    // 0. High-Speed Local Cache Hit (0ms - instant disk stream). Zero-byte files
+    //    are valid, so a 0 length cache file is accepted for 0 length records.
+    if (cacheFilePath && fs.existsSync(cacheFilePath)) {
+      try {
+        const stat = fs.statSync(cacheFilePath);
+        // Unknown / zero-byte record size: any cached copy is acceptable (e.g. photos).
+        const sizeMatches = !expectedSize || stat.size === expectedSize;
+        if (stat.isFile() && sizeMatches) {
+          return {
+            type: 'stream',
+            stream: fs.createReadStream(cacheFilePath),
+            size: stat.size,
+            mimeType: fileRecord.mime_type,
+            localPath: cacheFilePath,
+            fromCache: true,
+          };
+        }
+      } catch (e) {}
+    }
+
+    // 1. Legacy local_path (only honoured when it resolves inside a managed dir)
+    if (fileRecord.local_path && isSafeLocalPath(fileRecord.local_path) && fs.existsSync(fileRecord.local_path)) {
+      try {
+        const stat = fs.statSync(fileRecord.local_path);
+        if (stat.isFile() && (stat.size > 0 || expectedSize === 0)) {
+          return {
+            type: 'stream',
+            stream: fs.createReadStream(fileRecord.local_path),
+            size: stat.size,
+            mimeType: fileRecord.mime_type,
+            localPath: fileRecord.local_path,
+            fromCache: true,
+          };
+        }
+      } catch (e) {}
+    }
+
+    // 2. Telegram Saved Messages (MTProto) download, streamed straight to disk
     const chunkIds = Array.isArray(fileRecord.telegram_chunk_ids) && fileRecord.telegram_chunk_ids.length > 0
       ? fileRecord.telegram_chunk_ids
       : (fileRecord.telegram_msg_id ? [fileRecord.telegram_msg_id] : []);
+    const chatId = fileRecord.telegram_chat_id || 'me';
 
-    if (fileRecord.storage_type === 'telegram' && this.client && chunkIds.length > 0) {
+    if (fileRecord.storage_type === 'telegram' && this.client && chunkIds.length > 0 && cacheFilePath) {
+      const partPaths = [];
       try {
-        // Multi-Part Chunk Reassembly in memory
         if (chunkIds.length > 1) {
-          console.log(`[Telegram Saved Messages] Reassembling ${chunkIds.length} chunks in memory for ${fileRecord.name}...`);
-          const chunkBuffers = [];
+          console.log(`[Telegram Saved Messages] Reassembling ${chunkIds.length} chunks for ${fileRecord.name}...`);
 
           for (let i = 0; i < chunkIds.length; i++) {
             const chunkMsgId = chunkIds[i];
-            const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
-              ids: [chunkMsgId],
-            });
-            if (messages && messages.length > 0 && messages[0].media) {
-              const chunkBuf = await this.client.downloadMedia(messages[0].media, { workers: 8 });
-              if (chunkBuf) {
-                chunkBuffers.push(chunkBuf);
-              }
-            }
+            const partPath = buildSafeLocalPath(CACHE_DIR, `${path.basename(cacheFilePath)}.part${i}`);
+            if (!partPath) throw new Error('Could not create a safe temporary chunk path.');
+
+            const media = await this._fetchMedia(chatId, chunkMsgId);
+            if (!media) throw new Error(`Telegram chunk message ${chunkMsgId} is missing.`);
+
+            const out = await this.client.downloadMedia(media, { outputFile: partPath });
+            const written = typeof out === 'string' && fs.existsSync(out) ? out : (fs.existsSync(partPath) ? partPath : null);
+            if (!written) throw new Error(`Failed to download chunk ${chunkMsgId}.`);
+            partPaths.push(written);
           }
-          const fullBuffer = Buffer.concat(chunkBuffers);
-          return {
-            type: 'buffer',
-            buffer: fullBuffer,
-            size: fullBuffer.length,
-            mimeType: fileRecord.mime_type,
-            localPath: null,
-          };
+
+          await this._concatFiles(partPaths, cacheFilePath);
         } else {
-          // Single Document Download directly in memory
-          const messages = await this.client.getMessages(fileRecord.telegram_chat_id || 'me', {
-            ids: [chunkIds[0]],
-          });
-
-          if (messages && messages.length > 0 && messages[0].media) {
-            const buffer = await this.client.downloadMedia(messages[0].media, {
-              workers: 8,
-            });
-
-            if (buffer) {
-              return {
-                type: 'buffer',
-                buffer,
-                size: buffer.length,
-                mimeType: fileRecord.mime_type,
-                localPath: null,
-              };
-            }
+          const media = await this._fetchMedia(chatId, chunkIds[0]);
+          if (!media) throw new Error(`Telegram message ${chunkIds[0]} is missing.`);
+          const out = await this.client.downloadMedia(media, { outputFile: cacheFilePath });
+          if (typeof out !== 'string' && !fs.existsSync(cacheFilePath)) {
+            throw new Error(`Failed to download message ${chunkIds[0]}.`);
           }
         }
+
+        const stat = fs.statSync(cacheFilePath);
+        return {
+          type: 'stream',
+          stream: fs.createReadStream(cacheFilePath),
+          size: stat.size,
+          mimeType: fileRecord.mime_type,
+          localPath: cacheFilePath,
+          fromCache: false,
+        };
       } catch (err) {
         console.error('[Telegram Saved Messages] MTProto download error:', err.message);
+        // Never serve a partially written cache file.
+        try { if (fs.existsSync(cacheFilePath)) fs.unlinkSync(cacheFilePath); } catch (e) {}
+        // A valid zero-byte file must still be servable.
+        if (expectedSize === 0) {
+          try {
+            fs.writeFileSync(cacheFilePath, Buffer.alloc(0));
+            return {
+              type: 'stream',
+              stream: fs.createReadStream(cacheFilePath),
+              size: 0,
+              mimeType: fileRecord.mime_type,
+              localPath: cacheFilePath,
+              fromCache: false,
+            };
+          } catch (e) {}
+        }
+      } finally {
+        for (const partPath of partPaths) {
+          try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) {}
+        }
       }
     }
 
-    throw new Error('File could not be downloaded from Telegram Saved Messages.');
+    // 3. Legacy fallback file in UPLOADS_DIR (path is generated & verified)
+    const fallbackPath = this._legacyUploadsPathForRecord(fileRecord);
+    if (fallbackPath && isSafeLocalPath(fallbackPath) && fs.existsSync(fallbackPath)) {
+      try {
+        const stat = fs.statSync(fallbackPath);
+        if (stat.isFile()) {
+          return {
+            type: 'stream',
+            stream: fs.createReadStream(fallbackPath),
+            size: stat.size,
+            mimeType: fileRecord.mime_type,
+            localPath: fallbackPath,
+            fromCache: true,
+          };
+        }
+      } catch (e) {}
+    }
+
+    throw new Error('File could not be downloaded from Telegram Saved Messages or local cache.');
+  }
+
+  async _fetchMedia(chatId, msgId) {
+    const id = normalizeMessageId(msgId);
+    if (id === null) return null;
+    const messages = await this.client.getMessages(chatId, { ids: [id] });
+    const message = messages && messages[0];
+    if (!message || !message.media) return null;
+    if (message.className === 'MessageEmpty') return null;
+    return message.media;
+  }
+
+  /** Concatenate files sequentially without buffering them in memory. */
+  _concatFiles(sourcePaths, targetPath) {
+    return new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(targetPath);
+      let index = 0;
+      let settled = false;
+
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        try { out.destroy(); } catch (e) {}
+        reject(err);
+      };
+
+      const next = () => {
+        if (settled) return;
+        if (index >= sourcePaths.length) {
+          out.end();
+          return;
+        }
+        const input = fs.createReadStream(sourcePaths[index++]);
+        input.on('error', fail);
+        input.on('end', next);
+        input.pipe(out, { end: false });
+      };
+
+      out.on('error', fail);
+      out.on('finish', () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      });
+
+      next();
+    });
   }
 
   /**
    * Delete message or array of chunk messages from Telegram Saved Messages
    */
   async deleteTelegramMessage(msgIdsOrRecord, telegramChatId = 'me') {
-    if (!msgIdsOrRecord) return;
+    if (!msgIdsOrRecord) return { deleted: 0 };
     await this.ensureClient();
 
     let ids = [];
+    let chatId = telegramChatId || 'me';
     if (Array.isArray(msgIdsOrRecord)) {
       ids = msgIdsOrRecord;
-    } else if (typeof msgIdsOrRecord === 'object' && msgIdsOrRecord !== null) {
-      if (Array.isArray(msgIdsOrRecord.telegram_chunk_ids) && msgIdsOrRecord.telegram_chunk_ids.length > 0) {
-        ids = msgIdsOrRecord.telegram_chunk_ids;
-      } else if (msgIdsOrRecord.telegram_msg_id) {
-        ids = [msgIdsOrRecord.telegram_msg_id];
-      }
+    } else if (typeof msgIdsOrRecord === 'object') {
+      const chunkIds = normalizeMessageIds(msgIdsOrRecord.telegram_chunk_ids);
+      const primary = normalizeMessageId(msgIdsOrRecord.telegram_msg_id);
+      ids = [...chunkIds];
+      if (primary && !ids.includes(primary)) ids.push(primary);
+      chatId = msgIdsOrRecord.telegram_chat_id || chatId;
     } else {
       ids = [msgIdsOrRecord];
     }
 
-    if (this.client && ids.length > 0) {
+    ids = normalizeMessageIds(ids);
+    if (!this.client || ids.length === 0) return { deleted: 0 };
+
+    let deleted = 0;
+    // Telegram caps deleteMessages requests, so chunk large deletions.
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = ids.slice(i, i + 100);
       try {
-        await this.client.deleteMessages(telegramChatId || 'me', ids, {
-          revoke: true,
-        });
-        console.log(`[Telegram Saved Messages] Deleted ${ids.length} message(s) from Saved Messages`);
+        await this.client.deleteMessages(chatId, batch, { revoke: true });
+        deleted += batch.length;
       } catch (err) {
         console.warn('[Telegram Saved Messages] Delete message notice:', err.message);
       }
     }
+    if (deleted > 0) {
+      console.log(`[Telegram Saved Messages] Deleted ${deleted} message(s) from Saved Messages`);
+    }
+    return { deleted };
   }
 
   /**
@@ -1026,7 +1479,13 @@ class TelegramService {
     }
 
     try {
-      db.saveData();
+      // Flush pending writes first so the backup can never read a stale file.
+      if (typeof db.flushData === 'function') {
+        db.flushData();
+      } else {
+        db.saveData(db.data, true);
+      }
+
       const dbPath = path.join(DATA_DIR, 'telecloud_db.json');
       let fileContent;
       if (fs.existsSync(dbPath)) {
@@ -1035,7 +1494,11 @@ class TelegramService {
         fileContent = Buffer.from(JSON.stringify(db.data || {}, null, 2), 'utf-8');
       }
 
-      const backupFileName = `telecloud_db_backup_${Date.now()}.json`;
+      // The MTProto session is never restored from a backup, so it must not be
+      // copied into a chat message.
+      fileContent = this._redactBackupSecrets(fileContent);
+
+      const backupFileName = `${BACKUP_FILE_PREFIX}${Date.now()}.json`;
       const customFile = new CustomFile(
         backupFileName,
         fileContent.length,
@@ -1045,19 +1508,35 @@ class TelegramService {
 
       const result = await this.client.sendFile('me', {
         file: customFile,
-        caption: `📦 Hightech Claude DB Backup - ${new Date().toISOString()}`,
+        caption: `📦 ${APP_CAPTION_MARKER} DB Backup - ${new Date().toISOString()}`,
         forceDocument: true,
       });
 
-      console.log(`[Telegram Backup] Database snapshot saved to Saved Messages (msg_id: ${result.id})`);
+      const messageId = normalizeMessageId(result && result.id);
+      console.log(`[Telegram Backup] Database snapshot saved to Saved Messages (msg_id: ${messageId})`);
       return {
         success: true,
-        messageId: result.id,
+        messageId,
         timestamp: new Date().toISOString(),
       };
     } catch (err) {
       console.warn('[Telegram Backup] Backup error:', err.message);
       return { success: false, error: err.message };
+    }
+  }
+
+  _redactBackupSecrets(buffer) {
+    const secretKeys = ['session_string', 'temp_auth_session', 'phone_number', 'phone_code_hash'];
+    try {
+      const parsed = JSON.parse(buffer.toString('utf-8'));
+      if (parsed && parsed.settings && typeof parsed.settings === 'object') {
+        for (const key of secretKeys) {
+          if (key in parsed.settings) parsed.settings[key] = '';
+        }
+      }
+      return Buffer.from(JSON.stringify(parsed, null, 2), 'utf-8');
+    } catch (e) {
+      return buffer;
     }
   }
 
@@ -1067,167 +1546,148 @@ class TelegramService {
   scheduleAutoBackup() {
     if (this._backupTimer) clearTimeout(this._backupTimer);
     this._backupTimer = setTimeout(() => {
+      this._backupTimer = null;
+      if (!this.client) return;
       this.backupDatabaseToSavedMessages().catch((e) => {
         console.warn('[Telegram Auto-Backup] Notice:', e.message);
       });
     }, 4000);
+    if (typeof this._backupTimer.unref === 'function') this._backupTimer.unref();
+  }
+
+  // --- Telegram scan / sync -------------------------------------------------
+
+  /**
+   * Walk Saved Messages and collect every message that carries media.
+   * `complete` is only true when the whole history was walked - partial scans
+   * must never be used to delete metadata.
+   */
+  async _scanSavedMessages({ maxMessages = DEFAULT_SYNC_WINDOW } = {}) {
+    const result = { messages: new Map(), complete: false, scannedCount: 0, oldestId: null, newestId: null, error: null };
+    if (!this.client) return result;
+
+    try {
+      let count = 0;
+      for await (const msg of this.client.iterMessages('me', { limit: maxMessages })) {
+        count += 1;
+        const id = normalizeMessageId(msg && msg.id);
+        if (id !== null && msg && msg.media) {
+          result.messages.set(id, msg);
+          if (result.oldestId === null || id < result.oldestId) result.oldestId = id;
+          if (result.newestId === null || id > result.newestId) result.newestId = id;
+        }
+        if (count >= maxMessages) break;
+      }
+      result.scannedCount = count;
+      result.complete = count < maxMessages;
+    } catch (err) {
+      result.error = err.message;
+      result.complete = false;
+      result.scannedCount = result.messages.size;
+    }
+
+    return result;
+  }
+
+  /** Authoritative existence check for specific message ids. */
+  async _findMissingMessageIds(chatId, ids) {
+    const missing = new Set();
+    const list = normalizeMessageIds(ids);
+    for (let i = 0; i < list.length; i += MSG_ID_VERIFY_BATCH) {
+      const batch = list.slice(i, i + MSG_ID_VERIFY_BATCH);
+      const messages = await this.client.getMessages(chatId, { ids: batch });
+      const found = new Set();
+      for (const message of messages || []) {
+        const id = normalizeMessageId(message && message.id);
+        if (id !== null && message.className !== 'MessageEmpty') found.add(id);
+      }
+      for (const id of batch) {
+        if (!found.has(id)) missing.add(id);
+      }
+    }
+    return missing;
   }
 
   /**
    * Scan and restore database & files from Telegram Saved Messages ('me')
    */
-  async syncFromTelegramSavedMessages(explicitSession = null) {
+  async syncFromTelegramSavedMessages(explicitSession = null, options = {}) {
     await this.ensureClient(explicitSession);
     if (!this.client) {
       return { success: false, error: 'Telegram client is not connected. Please connect your Telegram account first.' };
     }
 
+    const maxMessages = options.full
+      ? (options.maxMessages || FULL_SYNC_WINDOW)
+      : (options.maxMessages || DEFAULT_SYNC_WINDOW);
+
     try {
-      console.log('[Telegram Sync] Synchronizing files and folders from Telegram Saved Messages...');
-      const messages = await this.client.getMessages('me', { limit: 100 });
+      console.log(`[Telegram Sync] Synchronizing files and folders from Telegram Saved Messages (window: ${maxMessages})...`);
+
+      const scan = await this._scanSavedMessages({ maxMessages });
+      if (scan.error) {
+        console.warn(`[Telegram Sync] Scan incomplete: ${scan.error}`);
+      }
+      if (scan.scannedCount === 0 && !scan.complete) {
+        return { success: false, error: `Telegram scan failed: ${scan.error || 'no messages returned'}` };
+      }
+
       let restoredFromBackup = false;
       let newlyIndexedCount = 0;
 
-      // 1. First look for the newest database backup snapshot
-      for (const msg of messages) {
-        if (!msg || !msg.media || !msg.media.document) continue;
+      // 1. Restore state from the newest database backup snapshot in the scan.
+      let newestBackupId = null;
+      for (const [msgId, msg] of scan.messages.entries()) {
+        if (!this._isBackupMessage(msg)) continue;
+        if (newestBackupId === null || msgId > newestBackupId) newestBackupId = msgId;
+      }
 
-        let docFileName = '';
-        if (Array.isArray(msg.media.document.attributes)) {
-          for (const attr of msg.media.document.attributes) {
-            if (attr.fileName) {
-              docFileName = attr.fileName;
-              break;
+      if (newestBackupId !== null) {
+        const backupMsg = scan.messages.get(newestBackupId);
+        try {
+          console.log(`[Telegram Sync] Found cloud backup in message ${newestBackupId}, downloading...`);
+          const media = backupMsg.media;
+          const buffer = await this.client.downloadMedia(media);
+          if (buffer && buffer.length > 0) {
+            const parsed = JSON.parse(buffer.toString('utf-8'));
+            if (parsed && typeof parsed === 'object') {
+              const merge = db.mergeSnapshot(parsed);
+              restoredFromBackup = !!merge.restored;
+              console.log(`[Telegram Sync] Merged cloud snapshot: ${merge.folders} folders, ${merge.files} files, ${merge.api_keys} api keys`);
             }
           }
-        }
-
-        const isBackup = docFileName.startsWith('telecloud_db_backup_') ||
-                         (msg.message && msg.message.includes('Hightech Claude DB Backup'));
-
-        if (isBackup) {
-          try {
-            console.log(`[Telegram Sync] Found cloud backup in message ${msg.id} (${docFileName}), downloading...`);
-            const buffer = await this.client.downloadMedia(msg.media);
-            if (buffer && buffer.length > 0) {
-              const parsed = JSON.parse(buffer.toString('utf-8'));
-              if (parsed) {
-                // Merge folders safely
-                if (Array.isArray(parsed.folders) && parsed.folders.length > 0) {
-                  const folderMap = new Map((db.data.folders || []).map((f) => [f.id, f]));
-                  for (const f of parsed.folders) {
-                    const existing = folderMap.get(f.id);
-                    if (!existing || new Date(f.updated_at || f.created_at || 0) >= new Date(existing.updated_at || existing.created_at || 0)) {
-                      folderMap.set(f.id, { ...existing, ...f });
-                    }
-                  }
-                  db.data.folders = Array.from(folderMap.values());
-                }
-
-                // Merge files safely
-                if (Array.isArray(parsed.files) && parsed.files.length > 0) {
-                  const fileMap = new Map((db.data.files || []).map((f) => [f.id, f]));
-                  for (const f of parsed.files) {
-                    const existing = fileMap.get(f.id);
-                    if (!existing || new Date(f.updated_at || f.created_at || 0) >= new Date(existing.updated_at || existing.created_at || 0)) {
-                      fileMap.set(f.id, { ...existing, ...f });
-                    }
-                  }
-                  db.data.files = Array.from(fileMap.values());
-                }
-
-                // Merge API keys
-                if (Array.isArray(parsed.api_keys) && parsed.api_keys.length > 0) {
-                  const keyMap = new Map((db.data.api_keys || []).map((k) => [k.id, k]));
-                  for (const k of parsed.api_keys) {
-                    if (!keyMap.has(k.id)) keyMap.set(k.id, k);
-                  }
-                  db.data.api_keys = Array.from(keyMap.values());
-                }
-
-                restoredFromBackup = true;
-                console.log(`[Telegram Sync] Restored state from cloud snapshot: ${db.data.folders.length} folders, ${db.data.files.length} files`);
-                break;
-              }
-            }
-          } catch (err) {
-            console.warn('[Telegram Sync] Notice while parsing backup snapshot:', err.message);
-          }
+        } catch (err) {
+          console.warn('[Telegram Sync] Notice while parsing backup snapshot:', err.message);
         }
       }
 
-      // 2. Scan all media messages in Saved Messages to index any uploaded files
-      const realTelegramMsgMap = new Map();
-      for (const msg of messages) {
-        if (msg && msg.media) {
-          realTelegramMsgMap.set(msg.id, msg);
-        }
-      }
-
-      // Purge any files that do NOT exist in Telegram Saved Messages or are local files
-      db.data.files = (db.data.files || []).filter((f) => {
-        if (f.storage_type !== 'telegram' || !f.telegram_msg_id) return false;
-        if (Array.isArray(f.telegram_chunk_ids) && f.telegram_chunk_ids.length > 0) {
-          return f.telegram_chunk_ids.some((cid) => realTelegramMsgMap.has(cid));
-        }
-        return realTelegramMsgMap.has(f.telegram_msg_id);
-      });
-
+      // 2. Index any media message that is not tracked yet (unique per message id).
       const existingMsgIds = new Set();
-      for (const f of db.data.files) {
-        if (f.telegram_msg_id) existingMsgIds.add(f.telegram_msg_id);
-        if (Array.isArray(f.telegram_chunk_ids)) {
-          f.telegram_chunk_ids.forEach((id) => existingMsgIds.add(id));
-        }
+      for (const f of db.data.files || []) {
+        const primary = normalizeMessageId(f.telegram_msg_id);
+        if (primary !== null) existingMsgIds.add(primary);
+        for (const chunkId of normalizeMessageIds(f.telegram_chunk_ids)) existingMsgIds.add(chunkId);
       }
 
-      for (const [msgId, msg] of realTelegramMsgMap.entries()) {
+      const newIds = Array.from(scan.messages.keys()).sort((a, b) => a - b);
+      for (const msgId of newIds) {
         if (existingMsgIds.has(msgId)) continue;
+        const msg = scan.messages.get(msgId);
+        if (this._isBackupMessage(msg)) continue;
 
-        let fileName = '';
-        let mimeType = 'application/octet-stream';
-        let fileSize = 0;
-
-        if (msg.media.document) {
-          const doc = msg.media.document;
-          fileSize = Number(doc.size) || 0;
-          mimeType = doc.mimeType || 'application/octet-stream';
-          if (Array.isArray(doc.attributes)) {
-            for (const attr of doc.attributes) {
-              if (attr.fileName) {
-                fileName = attr.fileName;
-                break;
-              }
-            }
-          }
-        } else if (msg.media.photo) {
-          fileName = `photo_${msg.id}.jpg`;
-          mimeType = 'image/jpeg';
-          fileSize = 0;
-        }
-
+        const { fileName, mimeType, fileSize } = this._extractFileMetadata(msg);
         if (!fileName) continue;
-        if (fileName.startsWith('telecloud_db_backup_')) continue;
 
-        // Extract original name from caption if present
-        if (msg.message && msg.message.includes('Hightech Claude')) {
-          const match = msg.message.match(/Hightech Claude(?: \[Part \d+\/\d+\])?: (.+?)(?: \([\d.]+ [KMGT]?B\))?$/m);
-          if (match && match[1]) {
-            fileName = match[1].trim();
-          }
-        }
-
-        const category = detectCategory(mimeType, fileName);
-        const newFileRecord = {
-          id: 'file_' + crypto.randomUUID(),
+        const createdAt = new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString();
+        await db.insertFile({
           folder_id: null,
           name: fileName,
           original_name: fileName,
           mime_type: mimeType,
           size: fileSize,
-          category,
-          telegram_msg_id: msg.id,
-          telegram_chunk_ids: [msg.id],
+          category: detectCategory(mimeType, fileName),
+          telegram_msg_id: msgId,
+          telegram_chunk_ids: [msgId],
           is_chunked: false,
           total_parts: 1,
           telegram_chat_id: 'me',
@@ -1240,27 +1700,74 @@ class TelegramService {
           is_starred: 0,
           is_trash: 0,
           is_shared: 0,
-          created_at: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
-          updated_at: new Date(msg.date ? msg.date * 1000 : Date.now()).toISOString(),
-        };
-
-        db.data.files.push(newFileRecord);
-        existingMsgIds.add(msg.id);
+          created_at: createdAt,
+        });
+        existingMsgIds.add(msgId);
         newlyIndexedCount++;
+      }
+
+      // 3. Purge stale metadata ONLY from an authoritative scan.
+      //    - complete scan  -> anything missing is really gone
+      //    - partial scan   -> verify the candidates by explicit id lookup first
+      const candidates = (db.data.files || []).filter((f) => {
+        const ids = normalizeMessageIds(f.telegram_chunk_ids);
+        const primary = normalizeMessageId(f.telegram_msg_id);
+        if (primary !== null && !ids.includes(primary)) ids.push(primary);
+        if (ids.length === 0) return false; // non-Telegram metadata is never purged here
+        return !ids.some((id) => scan.messages.has(id));
+      });
+
+      let purgedIds = [];
+      let purgeMode = scan.complete ? 'authoritative-scan' : 'verified';
+      if (candidates.length > 0) {
+        if (scan.complete) {
+          purgedIds = db.purgeMissingTelegramFiles(candidates.map((f) => f.id));
+        } else {
+          try {
+            const candidateIds = new Set();
+            for (const file of candidates) {
+              for (const id of normalizeMessageIds(file.telegram_chunk_ids)) candidateIds.add(id);
+              const primary = normalizeMessageId(file.telegram_msg_id);
+              if (primary !== null) candidateIds.add(primary);
+            }
+            const missing = await this._findMissingMessageIds('me', Array.from(candidateIds));
+            purgedIds = db.purgeMissingTelegramFiles(
+              candidates
+                .filter((file) => {
+                  const ids = normalizeMessageIds(file.telegram_chunk_ids);
+                  const primary = normalizeMessageId(file.telegram_msg_id);
+                  if (primary !== null && !ids.includes(primary)) ids.push(primary);
+                  return ids.every((id) => missing.has(id));
+                })
+                .map((f) => f.id)
+            );
+          } catch (err) {
+            // Verification failed -> keep every record, never guess.
+            purgeMode = 'skipped-verification-failed';
+            console.warn('[Telegram Sync] Skipped purge (verification failed):', err.message);
+          }
+        }
       }
 
       this._lastTelegramSync = Date.now();
       db.saveData();
-      console.log(`[Telegram Sync] Complete. Total folders: ${db.data.folders.length}, Total files: ${db.data.files.length} (${newlyIndexedCount} newly indexed)`);
+      console.log(
+        `[Telegram Sync] Complete (${purgeMode}). Total folders: ${(db.data.folders || []).length}, ` +
+        `Total files: ${(db.data.files || []).length} (${newlyIndexedCount} newly indexed, ${purgedIds.length} purged)`
+      );
 
       return {
         success: true,
         restoredFromBackup,
         newlyIndexedCount,
-        foldersCount: db.data.folders.length,
-        filesCount: db.data.files.length,
-        folders: db.data.folders,
-        files: db.data.files,
+        purgedCount: purgedIds.length,
+        scanComplete: scan.complete,
+        scannedCount: scan.scannedCount,
+        purgeMode,
+        foldersCount: (db.data.folders || []).length,
+        filesCount: (db.data.files || []).length,
+        folders: db.data.folders || [],
+        files: db.data.files || [],
       };
     } catch (err) {
       console.error('[Telegram Sync] Execution error:', err);
@@ -1271,3 +1778,4 @@ class TelegramService {
 
 const telegramService = new TelegramService();
 module.exports = telegramService;
+module.exports.internalHelpers = { isSafeLocalPath, buildSafeLocalPath, safePathPart };

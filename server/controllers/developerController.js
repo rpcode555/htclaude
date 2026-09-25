@@ -358,6 +358,18 @@ const STORAGE_UNAVAILABLE_PATTERNS = [
 ];
 
 /**
+ * Delivery failures additionally include the storage layer's catch-all
+ * "could not be downloaded" error: the record exists, so failing to read it is a
+ * backend problem (retryable), not a missing file.
+ */
+const DELIVERY_UNAVAILABLE_PATTERNS = [
+  ...STORAGE_UNAVAILABLE_PATTERNS,
+  /could not be downloaded/i,
+  /local cache/i,
+  /no local copy/i,
+];
+
+/**
  * Translate a low level failure into an HTTP status. Storage/connectivity
  * problems must surface as 503 (retryable), never as a fake success.
  */
@@ -814,6 +826,12 @@ exports.uploadViaApiKey = async (req, res) => {
   };
 
   try {
+    // requireApiKey() normally guarantees this; refuse rather than writing a
+    // record with api_key_id = undefined if the route was mounted without it.
+    if (!req.apiKey || !req.apiKey.id) {
+      return respondJson(401, { success: false, error: 'Unauthorized: A valid API Key is required.' });
+    }
+
     if (rawFiles.length === 0) {
       return respondJson(400, {
         success: false,

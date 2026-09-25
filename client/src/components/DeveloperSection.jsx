@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { formatDate, formatBytes } from '../utils';
+import { apiUrl, getServerOrigin, publicApiUrl, toApiBase } from '../apiConfig';
 import { useConfirm } from '../context/ConfirmContext';
 
 export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
@@ -220,19 +221,13 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
   // Active key string used in code snippets
   const activeKeyStr = selectedKeyForSnippet || (apiKeys[0]?.key) || 'htc_live_YOUR_API_KEY_HERE';
 
-  // Dynamic Base URL detection
-  const defaultBaseUrl =
-    typeof window !== 'undefined'
-      ? window.location.port === '3000'
-        ? `${window.location.protocol}//${window.location.hostname}:5000`
-        : window.location.origin
-      : 'https://your-domain.com';
-
-  const effectiveBaseUrl = useCustomDomain && customDomainInput.trim()
-    ? (customDomainInput.trim().startsWith('http') ? customDomainInput.trim().replace(/\/+$/, '') : `https://${customDomainInput.trim().replace(/\/+$/, '')}`)
-    : defaultBaseUrl;
-
-  const apiEndpointUrl = `${effectiveBaseUrl}/api/v1/upload`;
+  // Public, absolute API base derived from the centralized VITE_API_BASE config
+  // (never hardcoded), used for copy-paste ready snippets and direct file links.
+  const defaultBaseUrl = getServerOrigin();
+  const defaultApiBase = publicApiUrl('') || (typeof window !== 'undefined' ? window.location.origin : '');
+  const customApiBase = toApiBase(customDomainInput);
+  const activeApiBase = useCustomDomain && customApiBase ? customApiBase : defaultApiBase;
+  const apiEndpointUrl = `${activeApiBase}/v1/upload`;
 
   const getPurposeBadge = (purpose) => {
     switch (purpose) {
@@ -254,10 +249,11 @@ export default function DeveloperSection({ onRefreshStorage, onFileClick }) {
     switch (selectedLanguage) {
       case 'js':
         return `// 🌐 JavaScript / React / Next.js / Vue
-async function uploadImage(imageFile) {
+async function uploadFile(file) {
   const formData = new FormData();
-  formData.append('image', imageFile);
+  formData.append('file', file);
 
+  // The API key is ALWAYS sent as the X-API-Key header
   const response = await fetch('${apiEndpointUrl}', {
     method: 'POST',
     headers: {
@@ -267,10 +263,12 @@ async function uploadImage(imageFile) {
   });
 
   const data = await response.json();
-  if (data.success) {
-    console.log('Direct Image URL:', data.file.direct_url);
-    return data.file.direct_url;
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || 'Upload failed');
   }
+
+  console.log('Direct public URL:', data.file.direct_url);
+  return data.file.direct_url;
 }`;
 
       case 'nodejs':
@@ -298,41 +296,78 @@ async function uploadToHTClaude(filePath) {
         return `# 🐍 Python (Requests)
 import requests
 
-def upload_image(file_path):
+def upload_file(file_path):
     url = '${apiEndpointUrl}'
     headers = {
         'X-API-Key': '${activeKeyStr}'
     }
     with open(file_path, 'rb') as f:
-        files = {'image': f}
+        files = {'file': f}
         response = requests.post(url, headers=headers, files=files)
-        data = response.json()
-        print('Direct Image URL:', data['file']['direct_url'])
-        return data['file']['direct_url']
+    data = response.json()
+    if not response.ok or not data.get('success'):
+        raise RuntimeError(data.get('error', 'Upload failed'))
+    print('Direct public URL:', data['file']['direct_url'])
+    return data['file']['direct_url']
 
-upload_image('photo.jpg')`;
+upload_file('photo.jpg')`;
 
       case 'curl':
         return `# 💻 cURL (Command Line / Terminal)
 curl -X POST \\
   "${apiEndpointUrl}" \\
   -H "X-API-Key: ${activeKeyStr}" \\
-  -F "image=@/path/to/your/image.png"`;
+  -F "file=@/path/to/your/image.png"`;
 
       case 'html':
-        return `<!-- 📱 HTML Direct Form Action -->
-<form action="${apiEndpointUrl}" method="POST" enctype="multipart/form-data">
-  <input type="hidden" name="api_key" value="${activeKeyStr}" />
-  <input type="file" name="image" accept="image/*" required />
+        return `<!-- 📱 Browser integration (fetch + X-API-Key) -->
+<!-- A plain HTML <form> cannot send the X-API-Key header, so upload with fetch. -->
+<form id="uploadForm">
+  <input type="file" id="fileInput" required />
   <button type="submit">Upload to HT Claude Cloud</button>
-</form>`;
+</form>
+<div id="preview"></div>
+
+<script>
+  document.getElementById('uploadForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const input = document.getElementById('fileInput');
+    if (!input.files.length) return;
+
+    const body = new FormData();
+    body.append('file', input.files[0]);
+
+    try {
+      const response = await fetch('${apiEndpointUrl}', {
+        method: 'POST',
+        headers: { 'X-API-Key': '${activeKeyStr}' },
+        body: body
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Upload failed');
+      }
+
+      document.getElementById('preview').innerHTML = data.file.embed.html;
+      console.log('Direct public URL:', data.file.direct_url);
+    } catch (err) {
+      console.error(err.message);
+      alert(err.message);
+    }
+  });
+</script>
+
+<!-- ⚠️ Browser uploads are subject to CORS: call this from an allowed origin.
+     From anywhere else use the cURL / Python / Node.js snippets above. -->`;
 
       default:
         return '';
     }
   };
 
-  // Playground Upload Handler
+  // Playground Upload Handler (always targets the app's own configured API base)
   const handlePlaygroundUpload = async (e) => {
     e.preventDefault();
     if (!testFile) return;
@@ -342,11 +377,11 @@ curl -X POST \\
 
     try {
       const formData = new FormData();
-      formData.append('image', testFile);
+      formData.append('file', testFile);
 
       const targetKey = selectedKeyRecord ? selectedKeyRecord.key : activeKeyStr;
 
-      const res = await fetch('/api/v1/upload', {
+      const res = await fetch(apiUrl('/v1/upload'), {
         method: 'POST',
         headers: {
           'X-API-Key': targetKey,
@@ -354,8 +389,8 @@ curl -X POST \\
         body: formData,
       });
 
-      const data = await res.json();
-      if (res.ok && data.success) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
         setTestResult(data);
         if (onRefreshStorage) onRefreshStorage();
         if (selectedKeyRecord) {
@@ -363,7 +398,7 @@ curl -X POST \\
         }
         loadKeys();
       } else {
-        setTestError(data.error || 'Upload failed');
+        setTestError(data?.error || `Upload failed (server responded ${res.status})`);
       }
     } catch (err) {
       setTestError(err.message || 'Network error');
@@ -549,7 +584,7 @@ curl -X POST \\
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredFiles.map((file) => {
-                const directUrl = `${effectiveBaseUrl}/api/v1/raw/${file.id}`;
+                const directUrl = `${activeApiBase}/v1/raw/${file.id}`;
                 const isCopiedUrl = copiedUrlId === file.id;
 
                 return (
@@ -761,7 +796,7 @@ curl -X POST \\
               <h4 className="text-xs font-bold text-gray-900 dark:text-gray-100">Copy Code Snippet</h4>
             </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
-              Choose JS, Python, Node, cURL or HTML direct upload.
+              Choose JS, Python, Node, cURL or a browser (fetch) example.
             </p>
           </div>
 
@@ -1003,7 +1038,7 @@ curl -X POST \\
         )}
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-          <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+          <span className="text-xs text-gray-500 dark:text-gray-400 font-mono break-all">
             API URL: <strong className="text-rose-600 dark:text-rose-400">{apiEndpointUrl}</strong>
           </span>
 
@@ -1014,7 +1049,7 @@ curl -X POST \\
               { id: 'nodejs', label: 'Node.js' },
               { id: 'python', label: 'Python' },
               { id: 'curl', label: 'cURL' },
-              { id: 'html', label: 'HTML' },
+              { id: 'html', label: 'HTML (fetch)' },
             ].map((lang) => (
               <button
                 key={lang.id}
@@ -1048,6 +1083,15 @@ curl -X POST \\
             <span>{copiedSnippet ? 'Copied!' : 'Copy Code'}</span>
           </button>
         </div>
+
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 flex items-start gap-1.5">
+          <Shield className="w-3.5 h-3.5 shrink-0 mt-px text-rose-400" />
+          <span>
+            The key must travel in the <code className="font-mono text-rose-400">X-API-Key</code> header —
+            plain HTML form submissions cannot set headers, so browser uploads use <code className="font-mono text-rose-400">fetch</code>.
+            Browser calls are also subject to CORS: use the cURL / Python / Node.js examples for server-side or cross-origin uploads.
+          </span>
+        </p>
       </div>
 
       {/* ── Live Interactive Playground / Test Upload ── */}

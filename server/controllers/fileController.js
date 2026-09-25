@@ -202,7 +202,10 @@ exports.listFiles = async (req, res) => {
     const shouldSync = (db.data.files || []).length === 0 || req.query?.sync === 'true';
     if (shouldSync) {
       try {
-        await telegramService.syncFromTelegramSavedMessages(activeSession);
+        // ?fullSync=true walks the complete Saved Messages history (slower, but
+        // the only mode where a scan can be treated as authoritative).
+        const syncOptions = req.query?.fullSync === 'true' ? { full: true } : undefined;
+        await telegramService.syncFromTelegramSavedMessages(activeSession, syncOptions);
       } catch (e) {
         console.warn('[Files] Auto-sync notice:', e.message);
       }
