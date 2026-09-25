@@ -214,7 +214,9 @@ export const api = {
 
   async syncTelegram() {
     const headers = await getAuthHeader();
-    const res = await fetch(`${API_BASE}/auth/sync-telegram`, {
+    const tgSession = localStorage.getItem('htc_tg_session');
+    const url = tgSession ? `${API_BASE}/auth/sync-telegram?session=${encodeURIComponent(tgSession)}` : `${API_BASE}/auth/sync-telegram`;
+    const res = await fetch(url, {
       method: 'POST',
       headers,
     });
@@ -223,7 +225,9 @@ export const api = {
 
   async backupDatabase() {
     const headers = await getAuthHeader();
-    const res = await fetch(`${API_BASE}/auth/backup-db`, {
+    const tgSession = localStorage.getItem('htc_tg_session');
+    const url = tgSession ? `${API_BASE}/auth/backup-db?session=${encodeURIComponent(tgSession)}` : `${API_BASE}/auth/backup-db`;
+    const res = await fetch(url, {
       method: 'POST',
       headers,
     });

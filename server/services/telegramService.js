@@ -292,46 +292,47 @@ class TelegramService {
     }
 
     if (!isManualDisconnected && hasSession) {
-      this.ensureClient(sessionString).catch((e) => {
-        console.warn('[Telegram] Background client ensure notice:', e.message);
-      });
-    }
-
-    const apiId = await getSetting('api_id');
-    let userDetails = null;
-
-    if (this.client && !isManualDisconnected) {
-      try {
-        // 3-second timeout safeguard on getMe so cold-starts or network delays never freeze the response
-        const me = await Promise.race([
-          this.client.getMe(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('getMe timeout')), 3000)),
-        ]);
-        if (me) {
-          userDetails = {
-            id: me.id.toString(),
-            firstName: me.firstName || '',
-            lastName: me.lastName || '',
-            username: me.username || '',
-            phone: me.phone || '',
-            isPremium: me.premium || false,
-            target: 'Saved Messages (me)',
-          };
-          this._cachedUserDetails = userDetails;
-          this._lastStatusCheck = Date.now();
-        }
-      } catch (err) {
-        console.warn('[Telegram] Transient error getting user details:', err.message);
-        // If transient timeout happened but we have cached user details, keep them!
-        if (this._cachedUserDetails) {
-          userDetails = this._cachedUserDetails;
+      if (!this.client || !this.client.connected) {
+        try {
+          await this.ensureClient(sessionString);
+        } catch (e) {
+          console.warn('[Telegram] Client ensure notice:', e.message);
         }
       }
     }
 
+    const apiId = await getSetting('api_id');
+    let userDetails = this._cachedUserDetails;
+
+    if (this.client && !isManualDisconnected) {
+      try {
+        if (!userDetails || (now - this._lastStatusCheck >= 45000)) {
+          // 4-second timeout safeguard on getMe so cold-starts or network delays never freeze the response
+          const me = await Promise.race([
+            this.client.getMe(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('getMe timeout')), 4000)),
+          ]);
+          if (me) {
+            userDetails = {
+              id: me.id.toString(),
+              firstName: me.firstName || '',
+              lastName: me.lastName || '',
+              username: me.username || '',
+              phone: me.phone || '',
+              isPremium: me.premium || false,
+              target: 'Saved Messages (me)',
+            };
+            this._cachedUserDetails = userDetails;
+            this._lastStatusCheck = Date.now();
+          }
+        }
+      } catch (err) {
+        console.warn('[Telegram] Transient error getting user details:', err.message);
+      }
+    }
+
     const activeSession = this.client?.session?.save?.() || sessionString || '';
-    // If the user has a valid Telegram session string and has not manually clicked Disconnect, THEY ARE LOGGED IN!
-    const isConnected = !isManualDisconnected && (hasSession || !!userDetails || (!!this.client && this.client.connected));
+    const isConnected = !isManualDisconnected && !!this.client && (!!userDetails || this.client.connected);
 
     return {
       connected: isConnected,
@@ -1117,8 +1118,8 @@ class TelegramService {
   /**
    * Backup the database JSON directly into Telegram Saved Messages
    */
-  async backupDatabaseToSavedMessages() {
-    await this.ensureClient();
+  async backupDatabaseToSavedMessages(explicitSession = null) {
+    await this.ensureClient(explicitSession);
     if (!this.client) {
       return { success: false, error: 'Telegram MTProto client is not connected' };
     }

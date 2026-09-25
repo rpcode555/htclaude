@@ -20,8 +20,8 @@
       "color": "#3b82f6",
       "icon": "file-text",
       "is_trash": 0,
-      "created_at": "2026-08-31T09:26:49.819074+00:00",
-      "updated_at": "2026-08-31T09:26:49.819074+00:00"
+      "created_at": "2026-09-13T08:52:51.532Z",
+      "updated_at": "2026-09-13T08:52:51.534Z"
     },
     {
       "id": "root_media",
@@ -30,8 +30,8 @@
       "color": "#8b5cf6",
       "icon": "video",
       "is_trash": 0,
-      "created_at": "2026-08-31T09:26:49.819074+00:00",
-      "updated_at": "2026-08-31T09:26:49.819074+00:00"
+      "created_at": "2026-09-13T08:52:51.534Z",
+      "updated_at": "2026-09-13T08:52:51.534Z"
     },
     {
       "id": "root_photos",
@@ -40,8 +40,8 @@
       "color": "#ec4899",
       "icon": "image",
       "is_trash": 0,
-      "created_at": "2026-08-31T09:26:49.819074+00:00",
-      "updated_at": "2026-08-31T09:26:49.819074+00:00"
+      "created_at": "2026-09-13T08:52:51.534Z",
+      "updated_at": "2026-09-13T08:52:51.534Z"
     },
     {
       "id": "folder_67767080-4bf3-4911-978a-b0302d63742f",
@@ -468,6 +468,236 @@
       "is_shared": 1,
       "created_at": "2026-09-14T08:46:51.857Z",
       "updated_at": "2026-09-14T08:47:14.453Z"
+    },
+    {
+      "id": "file_fd9f4873-2b16-4e45-a754-0d5b909cb12f",
+      "folder_id": "folder_67767080-4bf3-4911-978a-b0302d63742f",
+      "name": "RANJAN INCOME.jpg",
+      "original_name": "RANJAN INCOME.jpg",
+      "mime_type": "image/jpeg",
+      "size": 256012,
+      "category": "images",
+      "telegram_msg_id": 21073,
+      "telegram_chunk_ids": [
+        21073
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": "/tmp/telecloud_cache/1790343417230_RANJAN_INCOME.jpg",
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-25T13:36:59.200Z",
+      "updated_at": "2026-09-25T13:36:59.200Z"
+    },
+    {
+      "id": "file_8304943d-ea77-45f7-a205-d72072f6c143",
+      "folder_id": null,
+      "name": "RIKTA PANCHYAT INCOME CERTIFICATE-compressed.pdf",
+      "original_name": "RIKTA PANCHYAT INCOME CERTIFICATE-compressed.pdf",
+      "mime_type": "application/pdf",
+      "size": 199375,
+      "category": "documents",
+      "telegram_msg_id": 21071,
+      "telegram_chunk_ids": [
+        21071
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-25T12:55:13.000Z",
+      "updated_at": "2026-09-25T12:55:13.000Z"
+    },
+    {
+      "id": "file_af84847b-2393-42ba-b926-62eb14692a83",
+      "folder_id": null,
+      "name": "my_app_v2.apk",
+      "original_name": "my_app_v2.apk",
+      "mime_type": "application/octet-stream",
+      "size": 14,
+      "category": "archives",
+      "telegram_msg_id": 21051,
+      "telegram_chunk_ids": [
+        21051
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-20T09:07:51.000Z",
+      "updated_at": "2026-09-20T09:07:51.000Z"
+    },
+    {
+      "id": "file_393177a5-ea21-45d4-9969-73397c0694f1",
+      "folder_id": null,
+      "name": "mytest.apk",
+      "original_name": "mytest.apk",
+      "mime_type": "application/octet-stream",
+      "size": 10,
+      "category": "archives",
+      "telegram_msg_id": 21050,
+      "telegram_chunk_ids": [
+        21050
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-20T08:58:13.000Z",
+      "updated_at": "2026-09-20T08:58:13.000Z"
+    },
+    {
+      "id": "file_c8734385-23ea-4acc-9df3-6a21c2828543",
+      "folder_id": null,
+      "name": "dummy_25mb.apk",
+      "original_name": "dummy_25mb.apk",
+      "mime_type": "application/octet-stream",
+      "size": 26214400,
+      "category": "archives",
+      "telegram_msg_id": 21049,
+      "telegram_chunk_ids": [
+        21049
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-20T08:56:59.000Z",
+      "updated_at": "2026-09-20T08:56:59.000Z"
+    },
+    {
+      "id": "file_db61bb40-1159-4803-aa3c-d309c5857e82",
+      "folder_id": null,
+      "name": "dummy.apk",
+      "original_name": "dummy.apk",
+      "mime_type": "application/octet-stream",
+      "size": 10,
+      "category": "archives",
+      "telegram_msg_id": 21048,
+      "telegram_chunk_ids": [
+        21048
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-20T08:55:42.000Z",
+      "updated_at": "2026-09-20T08:55:42.000Z"
+    },
+    {
+      "id": "file_bbb30683-bc6b-413b-b341-5493e25ab599",
+      "folder_id": null,
+      "name": "অমৃত.pdf",
+      "original_name": "অমৃত.pdf",
+      "mime_type": "application/pdf",
+      "size": 2087803,
+      "category": "documents",
+      "telegram_msg_id": 20987,
+      "telegram_chunk_ids": [
+        20987
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-13T09:01:35.000Z",
+      "updated_at": "2026-09-13T09:01:35.000Z"
+    },
+    {
+      "id": "file_472e0201-526f-4925-be4d-b02d1dde6f4f",
+      "folder_id": null,
+      "name": "অমৃত.pdf",
+      "original_name": "অমৃত.pdf",
+      "mime_type": "application/pdf",
+      "size": 2087803,
+      "category": "documents",
+      "telegram_msg_id": 20972,
+      "telegram_chunk_ids": [
+        20972
+      ],
+      "is_chunked": false,
+      "total_parts": 1,
+      "telegram_chat_id": "me",
+      "file_hash": null,
+      "storage_type": "telegram",
+      "local_path": null,
+      "thumbnail_path": null,
+      "api_key_id": null,
+      "tags": [
+        "telegram_synced"
+      ],
+      "is_starred": 0,
+      "is_trash": 0,
+      "is_shared": 0,
+      "created_at": "2026-09-13T06:50:30.000Z",
+      "updated_at": "2026-09-13T06:50:30.000Z"
     }
   ],
   "api_keys": [

@@ -168,7 +168,7 @@ exports.checkQrCode = async (req, res) => {
 exports.syncTelegram = async (req, res) => {
   try {
     const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
-    const sessionString = (await getSetting('session_string')) || clientSession || process.env.TELEGRAM_SESSION_STRING || '';
+    const sessionString = clientSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
     if (!sessionString) {
       return res.status(400).json({
         success: false,
@@ -186,7 +186,9 @@ exports.syncTelegram = async (req, res) => {
 
 exports.backupDatabase = async (req, res) => {
   try {
-    const result = await telegramService.backupDatabaseToSavedMessages();
+    const clientSession = (req.headers['x-telegram-session'] || req.query?.session || '').trim();
+    const sessionString = clientSession || (await getSetting('session_string')) || process.env.TELEGRAM_SESSION_STRING || '';
+    const result = await telegramService.backupDatabaseToSavedMessages(sessionString);
     if (!result.success) {
       return res.status(400).json(result);
     }
